@@ -1,0 +1,4 @@
+.env
+foveated_lidar_gui/target/
+__pycache__/
+*.py[cod]
