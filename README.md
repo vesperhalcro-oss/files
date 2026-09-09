@@ -1,6 +1,6 @@
 # Foveated LiDAR GUI
 
-Local Rust/egui visualization and PostgreSQL persistence for GPS-denied LiDAR mapping.
+Local Rust/egui visualization and embedded SQLite persistence for GPS-denied LiDAR mapping.
 
 ## Requirements
 
@@ -10,13 +10,26 @@ Local Rust/egui visualization and PostgreSQL persistence for GPS-denied LiDAR ma
 
 ## Run the GUI and mock simulation
 
+### From the downloaded executable
+
+Download `FoveatedLiDAR.exe` from the project release and double-click it.
+The first launch installs the application for the current Windows user,
+creates a desktop shortcut, and starts the simulator. Future launches can use
+the shortcut. No Rust, Python, PostgreSQL, or other runtime installation is
+required.
+
+The application stores its database at
+`%LOCALAPPDATA%\FoveatedLiDAR\foveated_lidar.sqlite3`.
+
+### From the source tree
+
 ```powershell
 .\run_project.ps1
 ```
 
 The window starts with a local mock LiDAR stream, a moving vehicle, a live map,
-pause/resume, speed control, reset, and telemetry. PostgreSQL persistence is
-optional for the simulation; configure `DATABASE_URL` in `.env` to enable it.
+pause/resume, speed control, reset, and telemetry. Data is saved automatically
+to the embedded local database.
 
 Or run directly:
 
