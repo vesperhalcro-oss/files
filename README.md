@@ -12,11 +12,15 @@ Local Rust/egui visualization and embedded SQLite persistence for GPS-denied LiD
 
 ### From the downloaded executable
 
-Download `FoveatedLiDAR.exe` from the project release and double-click it.
-The first launch installs the application for the current Windows user,
-creates a desktop shortcut, and starts the simulator. Future launches can use
-the shortcut. No Rust, Python, PostgreSQL, or other runtime installation is
-required.
+If you are not a developer, follow these steps:
+
+1. Download `FoveatedLiDAR.exe` from the project release.
+2. Open your **Downloads** folder and double-click `FoveatedLiDAR.exe`.
+3. If Windows shows a security warning, select **More info**, then **Run anyway**.
+4. The first launch installs the application and creates a desktop shortcut.
+5. Open **Foveated LiDAR** from the desktop whenever you want to use it.
+
+No Rust, Python, PostgreSQL, or command-line setup is required.
 
 The application stores its database at
 `%LOCALAPPDATA%\FoveatedLiDAR\foveated_lidar.sqlite3`.
