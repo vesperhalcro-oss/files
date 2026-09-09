@@ -19,19 +19,43 @@ createdb -U postgres tactical_mapper_db
 psql -U postgres -f database.sql
 ```
 
-## Run the GUI
+## Run the GUI and mock simulation
 
 ```powershell
 .\run_project.ps1
 ```
 
-Or:
+The window starts with a local mock LiDAR stream, a moving vehicle, a live map,
+pause/resume, speed control, reset, and telemetry. PostgreSQL persistence is
+optional for the simulation; configure `DATABASE_URL` in `.env` to enable it.
+
+Or run directly:
 
 ```powershell
 Push-Location foveated_lidar_gui
 cargo run --release
 Pop-Location
 ```
+
+## Build and install on Windows
+
+Generated binaries are intentionally not committed to source control. Build a
+release executable and prepare an install folder with:
+
+```powershell
+.\build_windows.ps1
+```
+
+Then install it for the current Windows user and create a desktop shortcut:
+
+```powershell
+Push-Location dist\FoveatedLiDAR
+.\install_windows.ps1
+Pop-Location
+```
+
+The installed executable is placed at
+`%LOCALAPPDATA%\FoveatedLiDAR\FoveatedLiDAR.exe`.
 
 ## Run the Python importer
 
