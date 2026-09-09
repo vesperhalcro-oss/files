@@ -14,7 +14,7 @@ Local Rust/egui visualization and embedded SQLite persistence for GPS-denied LiD
 
 If you are not a developer, follow these steps:
 
-1. Download `FoveatedLiDAR.exe` from the project release.
+1. Download `FoveatedLiDAR.exe` from the repository's main page or project release.
 2. Open your **Downloads** folder and double-click `FoveatedLiDAR.exe`.
 3. If Windows shows a security warning, select **More info**, then **Run anyway**.
 4. The first launch installs the application and creates a desktop shortcut.
@@ -43,17 +43,18 @@ cargo run --release
 Pop-Location
 ```
 
-## Build a single-file Windows executable
+## Build a single-file Windows executable (developers)
 
-Generated binaries are intentionally not committed to source control. Build the
-release executable with:
+The ready-to-download `FoveatedLiDAR.exe` is included in the repository root,
+so end users do not need to build anything. Developers can rebuild it with:
 
 ```powershell
 .\build_windows.ps1
 ```
 
-This creates `dist\FoveatedLiDAR.exe`. Copy that one file to a Windows machine
-and double-click it. On first launch it copies itself to
+This creates `dist\FoveatedLiDAR.exe`; copy the rebuilt file to the repository
+root if you want to update the downloadable executable. Double-click the file
+on a Windows machine. On first launch it copies itself to
 `%LOCALAPPDATA%\FoveatedLiDAR`, creates a desktop shortcut, creates the local
 SQLite database, and starts the application. PostgreSQL is not required.
 
