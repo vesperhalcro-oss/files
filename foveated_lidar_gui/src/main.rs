@@ -1,8 +1,9 @@
 use eframe::egui;
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
-use tokio_postgres::NoTls;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Pose3D {
@@ -41,8 +42,16 @@ const RES_FAR: f32 = 0.50;
 
 #[derive(Debug, Clone)]
 enum DbCommand {
-    SavePose { frame: u64, pose: Pose3D },
-    UpsertCell { gx: i32, gy: i32, elevation: f32, resolution: f32 },
+    SavePose {
+        frame: u64,
+        pose: Pose3D,
+    },
+    UpsertCell {
+        gx: i32,
+        gy: i32,
+        elevation: f32,
+        resolution: f32,
+    },
 }
 
 struct Engine {
@@ -100,7 +109,8 @@ impl Engine {
             let range = 8.0
                 + (angle * 3.0 + self.simulation_time).sin() * 2.0
                 + (angle * 11.0 - self.simulation_time * 0.7).cos().abs() * 1.5;
-            let intensity = (0.5 + 0.5 * (angle * 5.0 + self.simulation_time).sin()).clamp(0.0, 1.0);
+            let intensity =
+                (0.5 + 0.5 * (angle * 5.0 + self.simulation_time).sin()).clamp(0.0, 1.0);
             let point = LidarPoint {
                 x: range * angle.cos(),
                 y: range * angle.sin(),
@@ -136,43 +146,63 @@ impl Engine {
     }
 }
 
-async fn run_db_worker(
+fn database_path() -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+    let data_root = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("HOME"))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "A local data directory is not available",
+            )
+        })?;
+    let data_dir = PathBuf::from(data_root).join("FoveatedLiDAR");
+    std::fs::create_dir_all(&data_dir)?;
+    Ok(data_dir.join("foveated_lidar.sqlite3"))
+}
+
+fn run_db_worker(
     rx: mpsc::Receiver<DbCommand>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let url = std::env::var("DATABASE_URL").map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("DATABASE_URL is not set; configure it in .env: {error}"),
-        )
-    })?;
-    let (client, connection) = tokio_postgres::connect(&url, NoTls).await?;
-    tokio::spawn(async move {
-        if let Err(error) = connection.await {
-            eprintln!("[DB ERROR] Connection fault: {error}");
-        }
-    });
-    println!("[DB] Connected to PostgreSQL");
+    let connection = Connection::open(database_path()?)?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS vehicle_poses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            frame_id INTEGER NOT NULL,
+            pos_x REAL NOT NULL,
+            pos_y REAL NOT NULL,
+            pos_z REAL NOT NULL,
+            yaw REAL NOT NULL,
+            recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS grid_map_cells (
+            grid_x INTEGER NOT NULL,
+            grid_y INTEGER NOT NULL,
+            elevation REAL NOT NULL,
+            resolution REAL NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (grid_x, grid_y)
+        );",
+    )?;
+    println!("[DB] Using local SQLite database");
 
     while let Ok(command) = rx.recv() {
         let result = match command {
-            DbCommand::SavePose { frame, pose } => client
+            DbCommand::SavePose { frame, pose } => connection
                 .execute(
                     "INSERT INTO vehicle_poses (frame_id, pos_x, pos_y, pos_z, yaw) VALUES ($1, $2, $3, $4, $5)",
-                    &[&(frame as i64), &pose.x, &pose.y, &pose.z, &pose.yaw],
-                )
-                .await,
+                    params![frame as i64, pose.x, pose.y, pose.z, pose.yaw],
+                ),
             DbCommand::UpsertCell {
                 gx,
                 gy,
                 elevation,
                 resolution,
-            } => client
+            } => connection
                 .execute(
                     "INSERT INTO grid_map_cells (grid_x, grid_y, elevation, resolution) VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (grid_x, grid_y) DO UPDATE SET elevation = EXCLUDED.elevation, updated_at = CURRENT_TIMESTAMP",
-                    &[&gx, &gy, &elevation, &resolution],
-                )
-                .await,
+                     ON CONFLICT (grid_x, grid_y) DO UPDATE SET elevation = excluded.elevation, updated_at = CURRENT_TIMESTAMP",
+                    params![gx, gy, elevation, resolution],
+                ),
         };
         if let Err(error) = result {
             eprintln!("[DB ERROR] Write failed: {error}");
@@ -217,7 +247,10 @@ impl App {
         for pair in self.engine.trail.windows(2) {
             let from = center + egui::vec2(pair[0].0 * scale, -pair[0].1 * scale);
             let to = center + egui::vec2(pair[1].0 * scale, -pair[1].1 * scale);
-            painter.line_segment([from, to], egui::Stroke::new(2.0_f32, egui::Color32::LIGHT_BLUE));
+            painter.line_segment(
+                [from, to],
+                egui::Stroke::new(2.0_f32, egui::Color32::LIGHT_BLUE),
+            );
         }
         for point in &self.engine.points {
             let (sin_yaw, cos_yaw) = self.engine.pose.yaw.sin_cos();
@@ -234,7 +267,10 @@ impl App {
         let vehicle = center + egui::vec2(self.engine.pose.x * scale, -self.engine.pose.y * scale);
         painter.circle_filled(vehicle, 6.0, egui::Color32::from_rgb(240, 80, 70));
         let direction = egui::vec2(self.engine.pose.yaw.cos(), -self.engine.pose.yaw.sin()) * 14.0;
-        painter.line_segment([vehicle, vehicle + direction], egui::Stroke::new(3.0_f32, egui::Color32::WHITE));
+        painter.line_segment(
+            [vehicle, vehicle + direction],
+            egui::Stroke::new(3.0_f32, egui::Color32::WHITE),
+        );
     }
 }
 
@@ -243,30 +279,44 @@ impl eframe::App for App {
         if self.running {
             self.engine.step(1.0 / 60.0, self.speed);
         }
-        egui::SidePanel::left("controls").min_width(220.0).show(ctx, |ui| {
-            ui.heading("Simulation");
-            ui.separator();
-            ui.label("Mock LiDAR stream");
-            ui.colored_label(egui::Color32::LIGHT_GREEN, "● Online");
-            ui.add(egui::Slider::new(&mut self.speed, 0.25..=4.0).text("Speed"));
-            if ui.button(if self.running { "Pause simulation" } else { "Resume simulation" }).clicked() {
-                self.running = !self.running;
-            }
-            if ui.button("Reset mock run").clicked() {
-                self.engine.reset();
-            }
-            ui.separator();
-            ui.heading("Live telemetry");
-            ui.label(format!("Frame: {}", self.engine.frame));
-            ui.label(format!("LiDAR points: {}", self.engine.points.len()));
-            ui.label(format!("Map cells: {}", self.engine.map.len()));
-            ui.label(format!("X: {:.2} m", self.engine.pose.x));
-            ui.label(format!("Y: {:.2} m", self.engine.pose.y));
-            ui.label(format!("Yaw: {:.2} rad", self.engine.pose.yaw));
-            ui.label(format!("Elapsed: {:.1} s", self.engine.start.elapsed().as_secs_f32()));
-            ui.separator();
-            ui.small("The simulator runs locally and writes to PostgreSQL when DATABASE_URL is configured.");
-        });
+        egui::SidePanel::left("controls")
+            .min_width(220.0)
+            .show(ctx, |ui| {
+                ui.heading("Simulation");
+                ui.separator();
+                ui.label("Mock LiDAR stream");
+                ui.colored_label(egui::Color32::LIGHT_GREEN, "● Online");
+                ui.add(egui::Slider::new(&mut self.speed, 0.25..=4.0).text("Speed"));
+                if ui
+                    .button(if self.running {
+                        "Pause simulation"
+                    } else {
+                        "Resume simulation"
+                    })
+                    .clicked()
+                {
+                    self.running = !self.running;
+                }
+                if ui.button("Reset mock run").clicked() {
+                    self.engine.reset();
+                }
+                ui.separator();
+                ui.heading("Live telemetry");
+                ui.label(format!("Frame: {}", self.engine.frame));
+                ui.label(format!("LiDAR points: {}", self.engine.points.len()));
+                ui.label(format!("Map cells: {}", self.engine.map.len()));
+                ui.label(format!("X: {:.2} m", self.engine.pose.x));
+                ui.label(format!("Y: {:.2} m", self.engine.pose.y));
+                ui.label(format!("Yaw: {:.2} rad", self.engine.pose.yaw));
+                ui.label(format!(
+                    "Elapsed: {:.1} s",
+                    self.engine.start.elapsed().as_secs_f32()
+                ));
+                ui.separator();
+                ui.small(
+                    "The simulator runs locally and saves data to an embedded SQLite database.",
+                );
+            });
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Foveated LiDAR Map");
             ui.label("Live mock scan, vehicle trail, and reconstructed occupancy grid");
@@ -277,16 +327,99 @@ impl eframe::App for App {
     }
 }
 
+#[cfg(windows)]
+fn powershell_literal(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\'', "''")
+}
+
+#[cfg(windows)]
+fn prepare_installation() -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    if std::env::args().any(|argument| argument == "--installed") {
+        return Ok(false);
+    }
+
+    let current_exe = std::env::current_exe()?;
+    let install_dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "LOCALAPPDATA is not available",
+        )
+    })?)
+    .join("FoveatedLiDAR");
+    std::fs::create_dir_all(&install_dir)?;
+    let installed_exe = install_dir.join("FoveatedLiDAR.exe");
+    let is_installed = installed_exe
+        .canonicalize()
+        .ok()
+        .zip(current_exe.canonicalize().ok())
+        .is_some_and(|(installed, current)| installed == current);
+
+    if !is_installed {
+        std::fs::copy(&current_exe, &installed_exe)?;
+    }
+
+    let desktop = PathBuf::from(std::env::var_os("USERPROFILE").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "USERPROFILE is not available")
+    })?)
+    .join("Desktop")
+    .join("Foveated LiDAR.lnk");
+    let script = format!(
+        "$shell = New-Object -ComObject WScript.Shell; \
+         $shortcut = $shell.CreateShortcut('{desktop}'); \
+         $shortcut.TargetPath = '{target}'; \
+         $shortcut.WorkingDirectory = '{working}'; \
+         $shortcut.Description = 'Foveated LiDAR Map Simulator'; \
+         $shortcut.Save()",
+        desktop = powershell_literal(&desktop),
+        target = powershell_literal(&installed_exe),
+        working = powershell_literal(&install_dir),
+    );
+    let shortcut_status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .status()?;
+    if !shortcut_status.success() {
+        return Err("Could not create the Foveated LiDAR desktop shortcut.".into());
+    }
+
+    if !is_installed {
+        std::process::Command::new(&installed_exe)
+            .arg("--installed")
+            .spawn()?;
+        println!("Installed Foveated LiDAR to {}", installed_exe.display());
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(not(windows))]
+fn prepare_installation() -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(false)
+}
+
 fn main() -> eframe::Result<()> {
-    if let Err(error) = dotenvy::dotenv() {
-        if !matches!(error, dotenvy::Error::Io(_)) {
-            eprintln!("[CONFIG] Could not load .env: {error}");
+    let was_installed = match prepare_installation() {
+        Ok(was_installed) => was_installed,
+        Err(error) => {
+            eprintln!("[SETUP ERROR] {error}");
+            return Err(eframe::Error::AppCreation(error));
         }
+    };
+    if was_installed {
+        return Ok(());
+    }
+    if std::env::args().any(|argument| argument == "--installed") {
+        println!("[SETUP] Running the installed copy.");
     }
     let (db_tx, db_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().expect("failed to create Tokio runtime");
-        if let Err(error) = runtime.block_on(run_db_worker(db_rx)) {
+        if let Err(error) = run_db_worker(db_rx) {
             eprintln!("[DB FATAL] {error}");
         }
     });

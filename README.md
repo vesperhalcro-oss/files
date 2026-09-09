@@ -4,20 +4,9 @@ Local Rust/egui visualization and PostgreSQL persistence for GPS-denied LiDAR ma
 
 ## Requirements
 
-- Rust and Cargo
-- PostgreSQL with PostGIS if spatial LiDAR imports are used
-- Python 3.10+ for `sync_lidar_data.py`
-
-## Configuration
-
-Copy `.env.example` to `.env` and set the PostgreSQL password. The included `.env` contains local development defaults only; do not use it outside a local machine.
-
-## Database setup
-
-```powershell
-createdb -U postgres tactical_mapper_db
-psql -U postgres -f database.sql
-```
+- Rust and Cargo are only required to build the application.
+- The downloaded Windows executable has no runtime dependencies. It includes
+  SQLite and creates its database automatically.
 
 ## Run the GUI and mock simulation
 
@@ -37,25 +26,19 @@ cargo run --release
 Pop-Location
 ```
 
-## Build and install on Windows
+## Build a single-file Windows executable
 
-Generated binaries are intentionally not committed to source control. Build a
-release executable and prepare an install folder with:
+Generated binaries are intentionally not committed to source control. Build the
+release executable with:
 
 ```powershell
 .\build_windows.ps1
 ```
 
-Then install it for the current Windows user and create a desktop shortcut:
-
-```powershell
-Push-Location dist\FoveatedLiDAR
-.\install_windows.ps1
-Pop-Location
-```
-
-The installed executable is placed at
-`%LOCALAPPDATA%\FoveatedLiDAR\FoveatedLiDAR.exe`.
+This creates `dist\FoveatedLiDAR.exe`. Copy that one file to a Windows machine
+and double-click it. On first launch it copies itself to
+`%LOCALAPPDATA%\FoveatedLiDAR`, creates a desktop shortcut, creates the local
+SQLite database, and starts the application. PostgreSQL is not required.
 
 ## Run the Python importer
 
