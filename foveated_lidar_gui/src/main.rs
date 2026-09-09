@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use eframe::egui;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
