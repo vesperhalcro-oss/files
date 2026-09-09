@@ -6,7 +6,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 $root = $PSScriptRoot
 $project = Join-Path $root "foveated_lidar_gui"
-$dist = Join-Path $root "dist\FoveatedLiDAR"
+$dist = Join-Path $root "dist"
 
 Push-Location $project
 try {
@@ -20,7 +20,7 @@ finally {
 }
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-Copy-Item (Join-Path $project "target\release\foveated_lidar_gui.exe") (Join-Path $dist "FoveatedLiDAR.exe") -Force
-Copy-Item (Join-Path $root "install_windows.ps1") $dist -Force
-Write-Host "Built $dist\FoveatedLiDAR.exe"
-Write-Host "To install it for the current user, run: .\install_windows.ps1"
+$output = Join-Path $dist "FoveatedLiDAR.exe"
+Copy-Item (Join-Path $project "target\release\foveated_lidar_gui.exe") $output -Force
+Write-Host "Built single-file installer: $output"
+Write-Host "Copy FoveatedLiDAR.exe to any Windows machine and double-click it."
