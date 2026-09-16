@@ -2,6 +2,11 @@
 
 Local Rust/egui visualization and embedded SQLite persistence for GPS-denied LiDAR mapping.
 
+## Live demo
+
+This repository includes a lightweight static landing page configured for Vercel hosting.
+Once the project is connected to a Vercel account, the live deployment URL will appear here.
+
 ## Requirements
 
 - Rust and Cargo are only required to build the application.

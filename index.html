@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Foveated LiDAR GUI</title>
+    <meta
+      name="description"
+      content="Foveated LiDAR GUI is a local Rust and egui application for visualizing simulated LiDAR mapping and telemetry."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">FL</span>
+          <span>Foveated LiDAR</span>
+        </div>
+        <nav class="nav">
+          <a href="#overview">Overview</a>
+          <a href="#features">Features</a>
+          <a href="#run">Run</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Local navigation & mapping</p>
+            <h1>Foveated LiDAR GUI</h1>
+            <p class="lead">
+              A desktop Rust application for visualizing GPS-denied LiDAR mapping,
+              telemetry, and mock vehicle motion in a compact, local-first workflow.
+            </p>
+            <div class="cta-row">
+              <a class="button primary" href="#run">Run locally</a>
+              <a class="button secondary" href="https://github.com/vesperhalcro-oss/files" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+          <div class="hero-panel" aria-label="Application preview panel">
+            <div class="panel-header">
+              <span class="dot red"></span>
+              <span class="dot amber"></span>
+              <span class="dot green"></span>
+            </div>
+            <div class="panel-grid">
+              <div class="map-card">
+                <div class="mini-grid"></div>
+                <div class="vehicle"></div>
+              </div>
+              <div class="stats">
+                <div class="stat"><span>Speed</span><strong>32 km/h</strong></div>
+                <div class="stat"><span>Yaw</span><strong>12.4°</strong></div>
+                <div class="stat"><span>Map</span><strong>Live</strong></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="overview" class="content-section">
+          <div class="section-heading">
+            <p class="eyebrow">Overview</p>
+            <h2>Built for simulation, telemetry, and local map generation</h2>
+          </div>
+          <div class="info-grid">
+            <article class="info-card">
+              <h3>Mock LiDAR stream</h3>
+              <p>
+                Simulates a moving vehicle and live scan data to demonstrate how a
+                foveated mapping system could interpret range and motion cues.
+              </p>
+            </article>
+            <article class="info-card">
+              <h3>Live map</h3>
+              <p>
+                Updates the visualized environment as the vehicle moves, helping
+                track path, occupancy, and throughput locally without external services.
+              </p>
+            </article>
+            <article class="info-card">
+              <h3>Embedded SQLite</h3>
+              <p>
+                Stores telemetry and event data in a local database so the project
+                remains portable and self-contained on a Windows workstation.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section id="features" class="content-section">
+          <div class="section-heading">
+            <p class="eyebrow">Features</p>
+            <h2>What the GUI includes</h2>
+          </div>
+          <ul class="feature-list">
+            <li>Pause/resume controls</li>
+            <li>Speed adjustment</li>
+            <li>Reset state</li>
+            <li>Telemetry panel</li>
+            <li>Local map rendering</li>
+            <li>SQLite persistence</li>
+          </ul>
+        </section>
+
+        <section id="run" class="content-section run-section">
+          <div class="section-heading">
+            <p class="eyebrow">Run</p>
+            <h2>Quick start</h2>
+          </div>
+          <div class="code-block">
+            <pre><code>Push-Location foveated_lidar_gui
+cargo run --release
+Pop-Location</code></pre>
+          </div>
+          <p class="note">
+            Or run the project script from the repo root with <strong>.	run_project.ps1</strong>.
+          </p>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
