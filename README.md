@@ -23,7 +23,7 @@ If you are not a developer, follow these steps:
 2. Open your **Downloads** folder and double-click `FoveatedLiDAR.exe`.
 3. If Windows shows a security warning, select **More info**, then **Run anyway**.
 4. The first launch installs the application and creates a desktop shortcut.
-5. Open **Foveated LiDAR** from the desktop whenever you want to use it.
+5. Open **Tactical Mapper** from the desktop whenever you want to use it.
 
 No Rust, Python, PostgreSQL, or command-line setup is required.
 
@@ -48,25 +48,16 @@ cargo run --release
 Pop-Location
 ```
 
-## Build a single-file Windows executable
+## Build and install on Windows
 
 Generated binaries are intentionally not committed to source control. Build the
 release executable with:
 
 ```powershell
-.\build_windows.ps1
+.\setup.ps1
 ```
 
-This creates `dist\FoveatedLiDAR.exe`. Copy that one file to a Windows machine
-and double-click it. On first launch it copies itself to
-`%LOCALAPPDATA%\FoveatedLiDAR`, creates a desktop shortcut, creates the local
-SQLite database, and starts the application. PostgreSQL is not required.
-
-## Run the Python importer
-
-```powershell
-python -m pip install -r requirements.txt
-python foveated_lidar_gui\src\sync_lidar_data.py
-```
-
-The importer expects `generated/mock_lidar_stream.json`.
+This builds `dist\FoveatedLiDAR.exe`, installs it to
+`%LOCALAPPDATA%\FoveatedLiDAR`, and creates a **Tactical Mapper** desktop
+shortcut in one step. The application creates its local SQLite database on
+startup. PostgreSQL is not required.
