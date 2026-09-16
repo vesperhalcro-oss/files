@@ -15,6 +15,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
   </head>
   <body>
     <div class="page-shell">
@@ -40,7 +41,7 @@
               telemetry, and mock vehicle motion in a compact, local-first workflow.
             </p>
             <div class="cta-row">
-              <a class="button primary" href="#run">Run locally</a>
+              <a class="button primary" href="#live-app">Run demo</a>
               <a class="button secondary" href="https://github.com/vesperhalcro-oss/files" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
@@ -60,6 +61,39 @@
                 <div class="stat"><span>Yaw</span><strong>12.4°</strong></div>
                 <div class="stat"><span>Map</span><strong>Live</strong></div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="live-app" class="content-section live-app-section">
+          <div class="section-heading">
+            <p class="eyebrow">Live demo</p>
+            <h2>Run Tactical Mapper in your browser</h2>
+          </div>
+          <div class="app-shell">
+            <div class="app-toolbar">
+              <div class="toolbar-actions">
+                <button class="app-button primary" id="toggle-simulation" type="button">Pause</button>
+                <button class="app-button" id="reset-simulation" type="button">Reset</button>
+              </div>
+              <label class="speed-control" for="simulation-speed">
+                Speed
+                <input id="simulation-speed" type="range" min="0.5" max="3" step="0.5" value="1" />
+                <output id="speed-value">1x</output>
+              </label>
+            </div>
+            <div class="app-grid">
+              <div class="live-map-card">
+                <canvas id="lidar-map" aria-label="Live simulated LiDAR map"></canvas>
+              </div>
+              <aside class="telemetry-panel">
+                <p class="panel-label">Telemetry</p>
+                <div class="telemetry-stat"><span>Status</span><strong id="telemetry-status">Running</strong></div>
+                <div class="telemetry-stat"><span>Frame</span><strong id="telemetry-frame">0</strong></div>
+                <div class="telemetry-stat"><span>Position</span><strong id="telemetry-position">0.0, 0.0</strong></div>
+                <div class="telemetry-stat"><span>Yaw</span><strong id="telemetry-yaw">0.0°</strong></div>
+                <div class="telemetry-stat"><span>Points</span><strong id="telemetry-points">240</strong></div>
+              </aside>
             </div>
           </div>
         </section>
