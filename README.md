@@ -1,4 +1,4 @@
-# Foveated LiDAR GUI
+# Tactical Mapper
 
 Local Rust/egui visualization and embedded SQLite persistence for GPS-denied LiDAR mapping.
 
