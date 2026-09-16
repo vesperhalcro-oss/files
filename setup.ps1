@@ -1,42 +1,73 @@
+<#
+.SYNOPSIS
+    Builds Foveated LiDAR and installs it for the current user.
+
+.DESCRIPTION
+    Single-step replacement for build_windows.ps1 + install_windows.ps1.
+    Compiles the release binary, installs it under %LOCALAPPDATA%,
+    and creates a desktop shortcut. No PostgreSQL, Python, or manual
+    steps required - the app manages its own embedded SQLite database.
+
+.USAGE
+    .\setup.ps1
+#>
+
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    throw "Cargo is not installed. Install Rust from https://rustup.rs/."
-}
+$AppName    = "Foveated LiDAR"
+$ExeName    = "FoveatedLiDAR.exe"
+$Root       = $PSScriptRoot
+$ProjectDir = Join-Path $Root "foveated_lidar_gui"
+$InstallDir = Join-Path $env:LOCALAPPDATA "FoveatedLiDAR"
 
-$root = $PSScriptRoot
-$project = Join-Path $root "foveated_lidar_gui"
-$dist = Join-Path $root "dist"
-
-Push-Location $project
-try {
-    cargo build --release
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cargo release build failed with exit code $LASTEXITCODE."
+function Assert-Cargo {
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        throw "Cargo is not installed. Install Rust from https://rustup.rs/ and re-run this script."
     }
 }
-finally {
-    Pop-Location
+
+function Build-Release {
+    Write-Host "Building release binary..." -ForegroundColor Cyan
+    Push-Location $ProjectDir
+    try {
+        cargo build --release
+        if ($LASTEXITCODE -ne 0) {
+            throw "cargo build failed (exit code $LASTEXITCODE)."
+        }
+    }
+    finally {
+        Pop-Location
+    }
 }
 
-New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$output = Join-Path $dist "FoveatedLiDAR.exe"
-$builtBinary = Join-Path $project "target\release\foveated_lidar_gui.exe"
-Copy-Item $builtBinary $output -Force
+function Install-App {
+    Write-Host "Installing to $InstallDir..." -ForegroundColor Cyan
 
-$installDir = Join-Path $env:LOCALAPPDATA "FoveatedLiDAR"
-New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-$target = Join-Path $installDir "FoveatedLiDAR.exe"
-Copy-Item $output $target -Force
+    $builtExe = Join-Path $ProjectDir "target\release\foveated_lidar_gui.exe"
+    if (-not (Test-Path $builtExe)) {
+        throw "Build output not found at $builtExe."
+    }
 
-$shell = New-Object -ComObject WScript.Shell
-$shortcutPath = Join-Path $env:USERPROFILE "Desktop\Tactical Mapper.lnk"
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $target
-$shortcut.WorkingDirectory = $installDir
-$shortcut.Description = "Tactical Mapper"
-$shortcut.Save()
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    $target = Join-Path $InstallDir $ExeName
+    Copy-Item $builtExe $target -Force
 
-Write-Host "Built: $output"
-Write-Host "Installed: $target"
-Write-Host "Desktop shortcut created: $shortcutPath"
+    $shell    = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut((Join-Path $env:USERPROFILE "Desktop\$AppName.lnk"))
+    $shortcut.TargetPath       = $target
+    $shortcut.WorkingDirectory = $InstallDir
+    $shortcut.Description      = "$AppName - offline LiDAR mapping"
+    $shortcut.Save()
+
+    return $target
+}
+
+Assert-Cargo
+Build-Release
+$installedPath = Install-App
+
+Write-Host ""
+Write-Host "$AppName installed successfully." -ForegroundColor Green
+Write-Host "  Executable: $installedPath"
+Write-Host "  Shortcut:   Desktop\$AppName.lnk"
+Write-Host "  Database:   %LOCALAPPDATA%\FoveatedLiDAR\foveated_lidar.sqlite3 (created on first run)"

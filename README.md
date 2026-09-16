@@ -57,7 +57,7 @@ release executable with:
 .\setup.ps1
 ```
 
-This builds `dist\FoveatedLiDAR.exe`, installs it to
-`%LOCALAPPDATA%\FoveatedLiDAR`, and creates a **Tactical Mapper** desktop
+This builds `foveated_lidar_gui\target\release\foveated_lidar_gui.exe`, installs it to
+`%LOCALAPPDATA%\FoveatedLiDAR`, and creates a **Foveated LiDAR** desktop
 shortcut in one step. The application creates its local SQLite database on
 startup. PostgreSQL is not required.
