@@ -1,12 +1,35 @@
-# Foveated LiDAR GUI
+# Tactical Mapper
 
-Local Rust/egui visualization and embedded SQLite persistence for GPS-denied LiDAR mapping.
+> Real-time local mapping when GPS is unavailable.
 
-## Requirements
+Tactical Mapper is an offline-first LiDAR visualization tool for robotics teams,
+field operators, and developers who need a clear view of vehicle position, scan
+returns, and map reconstruction without relying on a network connection.
 
-- Rust and Cargo are only required to build the application.
-- The downloaded Windows executable has no runtime dependencies. It includes
-  SQLite and creates its database automatically.
+[![Live demo](https://img.shields.io/badge/live%20demo-Vercel-111827?logo=vercel)](https://vercel-hosting-setup-and-link.vercel.app/)
+[![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
+[![Version](https://img.shields.io/badge/version-0.1.0-22c55e)](foveated_lidar_gui/Cargo.toml)
+
+## Explore the product
+
+Open the [live Tactical Mapper demo](https://vercel-hosting-setup-and-link.vercel.app/)
+to see a simulated LiDAR map, moving vehicle marker, scan returns, telemetry,
+pause/resume controls, and speed control in your browser.
+
+The Windows application provides the same workflow as a native desktop tool,
+with local SQLite persistence and no network service required.
+
+## Download and run
+
+Run the one-step setup script from a Windows checkout:
+
+```powershell
+.\setup.ps1
+```
+
+It builds the release binary, installs it for the current user, and creates a
+**Tactical Mapper** desktop shortcut. The local database is created automatically
+on first launch.
 
 ## Run the GUI and mock simulation
 
@@ -18,9 +41,7 @@ If you are not a developer, follow these steps:
 2. Open your **Downloads** folder and double-click `FoveatedLiDAR.exe`.
 3. If Windows shows a security warning, select **More info**, then **Run anyway**.
 4. The first launch installs the application and creates a desktop shortcut.
-5. Open **Foveated LiDAR** from the desktop whenever you want to use it.
-
-No Rust, Python, PostgreSQL, or command-line setup is required.
+5. Open **Tactical Mapper** from the desktop whenever you want to use it.
 
 The application stores its database at
 `%LOCALAPPDATA%\FoveatedLiDAR\foveated_lidar.sqlite3`.
@@ -43,25 +64,16 @@ cargo run --release
 Pop-Location
 ```
 
-## Build a single-file Windows executable
+## Build and install on Windows
 
 Generated binaries are intentionally not committed to source control. Build the
 release executable with:
 
 ```powershell
-.\build_windows.ps1
+.\setup.ps1
 ```
 
-This creates `dist\FoveatedLiDAR.exe`. Copy that one file to a Windows machine
-and double-click it. On first launch it copies itself to
-`%LOCALAPPDATA%\FoveatedLiDAR`, creates a desktop shortcut, creates the local
-SQLite database, and starts the application. PostgreSQL is not required.
-
-## Run the Python importer
-
-```powershell
-python -m pip install -r requirements.txt
-python foveated_lidar_gui\src\sync_lidar_data.py
-```
-
-The importer expects `generated/mock_lidar_stream.json`.
+This builds `foveated_lidar_gui\target\release\foveated_lidar_gui.exe`, installs it to
+`%LOCALAPPDATA%\FoveatedLiDAR`, and creates a **Tactical Mapper** desktop
+shortcut in one step. The application creates its local SQLite database on
+startup. PostgreSQL is not required.

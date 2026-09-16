@@ -3,3 +3,4 @@ foveated_lidar_gui/target/
 dist/
 __pycache__/
 *.py[cod]
+.vercel
