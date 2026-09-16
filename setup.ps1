@@ -14,7 +14,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$AppName    = "Foveated LiDAR"
+$AppName    = "Tactical Mapper"
 $ExeName    = "FoveatedLiDAR.exe"
 $Root       = $PSScriptRoot
 $ProjectDir = Join-Path $Root "foveated_lidar_gui"

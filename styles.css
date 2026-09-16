@@ -118,6 +118,23 @@ h1 {
   line-height: 1.7;
 }
 
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1.2rem;
+}
+
+.badge {
+  padding: 0.42rem 0.7rem;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.08);
+  color: #bae6fd;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .cta-row {
   display: flex;
   flex-wrap: wrap;

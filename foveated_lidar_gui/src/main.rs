@@ -183,8 +183,6 @@ fn run_db_worker(
             PRIMARY KEY (grid_x, grid_y)
         );",
     )?;
-    println!("[DB] Using local SQLite database");
-
     while let Ok(command) = rx.recv() {
         let result = match command {
             DbCommand::SavePose { frame, pose } => connection
@@ -205,7 +203,7 @@ fn run_db_worker(
                 ),
         };
         if let Err(error) = result {
-            eprintln!("[DB ERROR] Write failed: {error}");
+            eprintln!("Local storage write failed: {error}");
         }
     }
     Ok(())
@@ -226,7 +224,12 @@ impl App {
         let center = rect.center();
         let scale = size / 70.0;
 
-        painter.rect_filled(rect, 6.0, egui::Color32::from_rgb(12, 22, 30));
+        painter.rect_filled(rect, 10.0, egui::Color32::from_rgb(10, 22, 28));
+        painter.rect_stroke(
+            rect,
+            10.0,
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 75, 78)),
+        );
         for step in -30..=30 {
             let offset = step as f32 * scale;
             painter.line_segment(
@@ -234,14 +237,14 @@ impl App {
                     center + egui::vec2(offset, -30.0 * scale),
                     center + egui::vec2(offset, 30.0 * scale),
                 ],
-                egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(27, 49, 59)),
+                egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(28, 54, 58)),
             );
             painter.line_segment(
                 [
                     center + egui::vec2(-30.0 * scale, offset),
                     center + egui::vec2(30.0 * scale, offset),
                 ],
-                egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(27, 49, 59)),
+                egui::Stroke::new(0.5_f32, egui::Color32::from_rgb(28, 54, 58)),
             );
         }
         for pair in self.engine.trail.windows(2) {
@@ -249,7 +252,7 @@ impl App {
             let to = center + egui::vec2(pair[1].0 * scale, -pair[1].1 * scale);
             painter.line_segment(
                 [from, to],
-                egui::Stroke::new(2.0_f32, egui::Color32::LIGHT_BLUE),
+                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(82, 196, 164)),
             );
         }
         for point in &self.engine.points {
@@ -258,68 +261,115 @@ impl App {
             let world_y = self.engine.pose.y + point.x * sin_yaw + point.y * cos_yaw;
             let position = center + egui::vec2(world_x * scale, -world_y * scale);
             let color = egui::Color32::from_rgb(
-                (80.0 + point.intensity * 175.0) as u8,
-                (120.0 + point.intensity * 120.0) as u8,
-                70,
+                (70.0 + point.intensity * 100.0) as u8,
+                (170.0 + point.intensity * 70.0) as u8,
+                (145.0 + point.intensity * 70.0) as u8,
             );
-            painter.circle_filled(position, 2.0 + point.z * 0.4, color);
+            painter.circle_filled(position, 1.8 + point.z * 0.35, color);
         }
         let vehicle = center + egui::vec2(self.engine.pose.x * scale, -self.engine.pose.y * scale);
-        painter.circle_filled(vehicle, 6.0, egui::Color32::from_rgb(240, 80, 70));
+        painter.circle_filled(vehicle, 7.0, egui::Color32::from_rgb(245, 184, 74));
         let direction = egui::vec2(self.engine.pose.yaw.cos(), -self.engine.pose.yaw.sin()) * 14.0;
         painter.line_segment(
             [vehicle, vehicle + direction],
-            egui::Stroke::new(3.0_f32, egui::Color32::WHITE),
+            egui::Stroke::new(3.0_f32, egui::Color32::from_rgb(255, 244, 210)),
+        );
+        let scale_start = rect.left_bottom() + egui::vec2(18.0, -18.0);
+        painter.line_segment(
+            [scale_start, scale_start + egui::vec2(10.0 * scale, 0.0)],
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(190, 215, 205)),
+        );
+        painter.text(
+            scale_start + egui::vec2(0.0, -8.0),
+            egui::Align2::LEFT_BOTTOM,
+            "10 m",
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(190, 215, 205),
         );
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut visuals = egui::Visuals::dark();
+        visuals.override_text_color = Some(egui::Color32::from_rgb(218, 232, 225));
+        visuals.panel_fill = egui::Color32::from_rgb(11, 24, 29);
+        visuals.window_fill = egui::Color32::from_rgb(11, 24, 29);
+        visuals.extreme_bg_color = egui::Color32::from_rgb(6, 15, 19);
+        visuals.faint_bg_color = egui::Color32::from_rgb(20, 43, 45);
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(18, 38, 40);
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(24, 57, 56);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(36, 88, 79);
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(63, 145, 116);
+        ctx.set_visuals(visuals);
         if self.running {
             self.engine.step(1.0 / 60.0, self.speed);
         }
         egui::SidePanel::left("controls")
-            .min_width(220.0)
+            .min_width(250.0)
             .show(ctx, |ui| {
-                ui.heading("Simulation");
+                ui.add_space(8.0);
+                ui.heading("TACTICAL MAPPER");
+                ui.small("GPS-denied mapping console");
                 ui.separator();
-                ui.label("Mock LiDAR stream");
-                ui.colored_label(egui::Color32::LIGHT_GREEN, "● Online");
+                let status_color = if self.running {
+                    egui::Color32::from_rgb(104, 214, 157)
+                } else {
+                    egui::Color32::from_rgb(245, 184, 74)
+                };
+                ui.colored_label(
+                    status_color,
+                    if self.running { "● RUNNING" } else { "● PAUSED" },
+                );
+                ui.label("Live local simulation");
+                ui.add_space(6.0);
                 ui.add(egui::Slider::new(&mut self.speed, 0.25..=4.0).text("Speed"));
                 if ui
-                    .button(if self.running {
-                        "Pause simulation"
-                    } else {
-                        "Resume simulation"
-                    })
+                    .add_sized(
+                        [ui.available_width(), 30.0],
+                        egui::Button::new(if self.running { "Pause" } else { "Resume" }),
+                    )
                     .clicked()
                 {
                     self.running = !self.running;
                 }
-                if ui.button("Reset mock run").clicked() {
+                if ui
+                    .add_sized([ui.available_width(), 30.0], egui::Button::new("Reset map"))
+                    .clicked()
+                {
                     self.engine.reset();
                 }
                 ui.separator();
-                ui.heading("Live telemetry");
-                ui.label(format!("Frame: {}", self.engine.frame));
-                ui.label(format!("LiDAR points: {}", self.engine.points.len()));
-                ui.label(format!("Map cells: {}", self.engine.map.len()));
-                ui.label(format!("X: {:.2} m", self.engine.pose.x));
-                ui.label(format!("Y: {:.2} m", self.engine.pose.y));
-                ui.label(format!("Yaw: {:.2} rad", self.engine.pose.yaw));
-                ui.label(format!(
-                    "Elapsed: {:.1} s",
-                    self.engine.start.elapsed().as_secs_f32()
-                ));
+                ui.heading("Telemetry");
+                egui::Grid::new("telemetry_grid")
+                    .num_columns(2)
+                    .spacing([18.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.weak("Frame");
+                        ui.label(self.engine.frame.to_string());
+                        ui.end_row();
+                        ui.weak("LiDAR points");
+                        ui.label(self.engine.points.len().to_string());
+                        ui.end_row();
+                        ui.weak("Map cells");
+                        ui.label(self.engine.map.len().to_string());
+                        ui.end_row();
+                        ui.weak("Position");
+                        ui.label(format!("{:.1}, {:.1} m", self.engine.pose.x, self.engine.pose.y));
+                        ui.end_row();
+                        ui.weak("Heading");
+                        ui.label(format!("{:.1}°", self.engine.pose.yaw.to_degrees()));
+                        ui.end_row();
+                        ui.weak("Elapsed");
+                        ui.label(format!("{:.1} s", self.engine.start.elapsed().as_secs_f32()));
+                        ui.end_row();
+                    });
                 ui.separator();
-                ui.small(
-                    "The simulator runs locally and saves data to an embedded SQLite database.",
-                );
+                ui.small("Local, offline-first storage enabled.");
             });
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Foveated LiDAR Map");
-            ui.label("Live mock scan, vehicle trail, and reconstructed occupancy grid");
+            ui.heading("Live tactical map");
+            ui.label("Position, scan returns, and vehicle trail");
             ui.add_space(8.0);
             self.draw_map(ui);
         });
@@ -362,13 +412,13 @@ fn prepare_installation() -> Result<bool, Box<dyn std::error::Error + Send + Syn
         std::io::Error::new(std::io::ErrorKind::NotFound, "USERPROFILE is not available")
     })?)
     .join("Desktop")
-    .join("Foveated LiDAR.lnk");
+    .join("Tactical Mapper.lnk");
     let script = format!(
         "$shell = New-Object -ComObject WScript.Shell; \
          $shortcut = $shell.CreateShortcut('{desktop}'); \
          $shortcut.TargetPath = '{target}'; \
          $shortcut.WorkingDirectory = '{working}'; \
-         $shortcut.Description = 'Foveated LiDAR Map Simulator'; \
+         $shortcut.Description = 'Tactical Mapper - offline LiDAR mapping'; \
          $shortcut.Save()",
         desktop = powershell_literal(&desktop),
         target = powershell_literal(&installed_exe),
@@ -385,7 +435,7 @@ fn prepare_installation() -> Result<bool, Box<dyn std::error::Error + Send + Syn
         ])
         .status()?;
     if !shortcut_status.success() {
-        return Err("Could not create the Foveated LiDAR desktop shortcut.".into());
+        return Err("Could not create the Tactical Mapper desktop shortcut.".into());
     }
 
     if !is_installed {
@@ -407,7 +457,7 @@ fn main() -> eframe::Result<()> {
     let was_installed = match prepare_installation() {
         Ok(was_installed) => was_installed,
         Err(error) => {
-            eprintln!("[SETUP ERROR] {error}");
+            eprintln!("Setup failed: {error}");
             return Err(eframe::Error::AppCreation(error));
         }
     };
@@ -415,12 +465,11 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     if std::env::args().any(|argument| argument == "--installed") {
-        println!("[SETUP] Running the installed copy.");
     }
     let (db_tx, db_rx) = mpsc::channel();
     std::thread::spawn(move || {
         if let Err(error) = run_db_worker(db_rx) {
-            eprintln!("[DB FATAL] {error}");
+            eprintln!("Local storage stopped: {error}");
         }
     });
     let options = eframe::NativeOptions {
@@ -430,7 +479,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Foveated LiDAR Map Simulator",
+        "Tactical Mapper",
         options,
         Box::new(|_| {
             Ok(Box::new(App {
