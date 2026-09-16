@@ -1,0 +1,10 @@
+foveated_lidar_gui/target/
+dist/
+.git/
+.github/
+*.rs
+*.toml
+*.ps1
+*.sql
+*.py
+*.json
