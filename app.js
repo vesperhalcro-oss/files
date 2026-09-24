@@ -11,6 +11,8 @@ const yawValue = document.querySelector("#telemetry-yaw");
 const pointsValue = document.querySelector("#telemetry-points");
 const objectsValue = document.querySelector("#telemetry-objects");
 const replayButton = document.querySelector("#start-replay");
+const loopInput = document.querySelector("#replay-loop");
+const scenarioInput = document.querySelector("#replay-scenario");
 const ids = (prefix) => Object.fromEntries(["drivable", "nondrivable", "static", "dynamic", "near", "mid", "far", "cells", "fps", "latency", "point-rate", "queue"].map((name) => [name, document.querySelector(`#${prefix}-${name}`)]));
 const semanticValues = ids("semantic");
 const zoneValues = ids("zone");
@@ -33,6 +35,8 @@ const state = {
   replayIndex: 0,
   replayElapsed: 0,
   replayLoaded: false,
+  loop: true,
+  scenario: "default",
   currentFrame: { raw_point_count: 0, pose: { x: 0, y: 0, yaw: 0 }, cells: [], objects: [] },
 };
 
@@ -187,7 +191,14 @@ function step(timestamp) {
       );
       if (state.replayElapsed >= frameDuration) {
         state.replayElapsed %= frameDuration;
-        state.replayIndex = (state.replayIndex + 1) % state.replayFrames.length;
+        const nextIndex = state.replayIndex + 1;
+        if (nextIndex >= state.replayFrames.length && !state.loop) {
+          state.running = false;
+          toggleButton.textContent = "Resume";
+          state.replayIndex = state.replayFrames.length - 1;
+        } else {
+          state.replayIndex = nextIndex % state.replayFrames.length;
+        }
         applyReplayFrame();
       }
     }
@@ -240,6 +251,15 @@ replayButton.addEventListener("click", () => {
 speedInput.addEventListener("input", () => {
   state.speed = Number(speedInput.value);
   speedValue.textContent = `${state.speed}x`;
+});
+
+loopInput.addEventListener("change", () => {
+  state.loop = loopInput.checked;
+});
+
+scenarioInput.addEventListener("change", () => {
+  state.scenario = scenarioInput.value;
+  resetButton.click();
 });
 
 window.addEventListener("resize", resizeCanvas);
