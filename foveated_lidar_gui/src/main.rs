@@ -32,6 +32,36 @@ enum SemanticClass {
     OtherDynamic,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerrainClass {
+    Unknown,
+    Drivable,
+    NonDrivable,
+}
+
+impl TerrainClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Drivable => "drivable",
+            Self::NonDrivable => "non_drivable",
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjectClass {
+    Wall,
+    Pole,
+    Barrier,
+    StaticObstacle,
+    Pedestrian,
+    Vehicle,
+    Cyclist,
+    OtherDynamic,
+}
+
 impl SemanticClass {
     const ALL: [Self; 10] = [
         Self::Unknown,
@@ -79,10 +109,32 @@ impl SemanticClass {
 
 #[derive(Debug, Clone, Copy)]
 struct SpatialCell {
-    elevation: f32,
+    grid_x: i32,
+    grid_y: i32,
     resolution: f32,
+    elevation_min: f32,
+    elevation_max: f32,
+    elevation_mean: f32,
+    elevation_sum: f32,
+    point_count: u32,
+    terrain_class: TerrainClass,
     semantic_class: SemanticClass,
     confidence: f32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct DetectedObject {
+    id: u64,
+    class: ObjectClass,
+    x: f32,
+    y: f32,
+    z: f32,
+    width: f32,
+    length: f32,
+    height: f32,
+    confidence: f32,
+    dynamic: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,14 +205,71 @@ const RES_MID: f32 = 0.10;
 const RES_FAR: f32 = 0.50;
 const DB_CHANNEL_CAPACITY: usize = 4096;
 
-fn resolution_for_range(range: f32) -> f32 {
-    if range <= 10.0 {
-        RES_NEAR
-    } else if range <= 30.0 {
-        RES_MID
-    } else {
-        RES_FAR
+fn resolution_for_range(range: f32) -> Option<f32> {
+    if !range.is_finite() || range > 100.0 {
+        return None;
     }
+    if range <= 10.0 {
+        Some(RES_NEAR)
+    } else if range <= 30.0 {
+        Some(RES_MID)
+    } else {
+        Some(RES_FAR)
+    }
+}
+
+fn terrain_for_cell(elevation_min: f32, elevation_max: f32) -> TerrainClass {
+    if !elevation_min.is_finite() || !elevation_max.is_finite() {
+        return TerrainClass::Unknown;
+    }
+    if elevation_max - elevation_min <= 0.30 {
+        TerrainClass::Drivable
+    } else {
+        TerrainClass::NonDrivable
+    }
+}
+
+fn detect_objects(points: &[LidarPoint]) -> Vec<DetectedObject> {
+    let elevated: Vec<_> = points.iter().filter(|point| point.z > 1.6).collect();
+    if elevated.is_empty() {
+        return Vec::new();
+    }
+    let min_x = elevated
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = elevated
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = elevated
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min);
+    let max_y = elevated
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_z = elevated
+        .iter()
+        .map(|point| point.z)
+        .fold(f32::INFINITY, f32::min);
+    let max_z = elevated
+        .iter()
+        .map(|point| point.z)
+        .fold(f32::NEG_INFINITY, f32::max);
+    vec![DetectedObject {
+        id: 1,
+        class: ObjectClass::StaticObstacle,
+        x: (min_x + max_x) / 2.0,
+        y: (min_y + max_y) / 2.0,
+        z: (min_z + max_z) / 2.0,
+        width: max_x - min_x,
+        length: max_y - min_y,
+        height: max_z - min_z,
+        confidence: 0.61,
+        dynamic: false,
+    }]
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +277,8 @@ enum DbCommand {
     SaveFrame {
         frame: u64,
         pose: Pose3D,
-        cells: Vec<(i32, i32, f32, f32, &'static str, f32)>,
+        cells: Vec<SpatialCell>,
+        objects: Vec<DetectedObject>,
     },
 }
 
@@ -184,6 +294,7 @@ struct Engine {
     storage_ok: Arc<AtomicBool>,
     dataset: Vec<LidarPoint>,
     dataset_offset: usize,
+    objects: Vec<DetectedObject>,
 }
 
 impl Engine {
@@ -200,6 +311,7 @@ impl Engine {
             storage_ok,
             dataset: load_dataset(),
             dataset_offset: 0,
+            objects: Vec::new(),
         }
     }
 
@@ -208,6 +320,7 @@ impl Engine {
         self.map.clear();
         self.points.clear();
         self.trail.clear();
+        self.objects.clear();
         self.frame = 0;
         self.simulation_time = 0.0;
         self.start = Instant::now();
@@ -233,13 +346,22 @@ impl Engine {
                 z: dataset_point.z,
                 intensity: dataset_point.intensity,
             };
+            if !point.x.is_finite()
+                || !point.y.is_finite()
+                || !point.z.is_finite()
+                || point.x.hypot(point.y) > 100.0
+            {
+                continue;
+            }
             self.points.push(point);
 
             let (sin_yaw, cos_yaw) = self.pose.yaw.sin_cos();
             let world_x = self.pose.x + point.x * cos_yaw - point.y * sin_yaw;
             let world_y = self.pose.y + point.x * sin_yaw + point.y * cos_yaw;
             let range = point.x.hypot(point.y);
-            let resolution = resolution_for_range(range);
+            let Some(resolution) = resolution_for_range(range) else {
+                continue;
+            };
             let resolution_band = (resolution * 100.0) as u8;
             let (semantic_class, confidence) = classify_point(point);
             let cell = (
@@ -249,46 +371,55 @@ impl Engine {
             let key = (cell.0, cell.1, resolution_band);
             match self.map.entry(key) {
                 Entry::Occupied(mut entry) => {
-                    if point.z > entry.get().elevation || confidence > entry.get().confidence {
-                        let stored = entry.get_mut();
-                        stored.elevation = stored.elevation.max(point.z);
+                    let stored = entry.get_mut();
+                    let previous = *stored;
+                    stored.elevation_min = stored.elevation_min.min(point.z);
+                    stored.elevation_max = stored.elevation_max.max(point.z);
+                    stored.elevation_sum += point.z;
+                    stored.point_count += 1;
+                    stored.elevation_mean = stored.elevation_sum / stored.point_count as f32;
+                    stored.terrain_class =
+                        terrain_for_cell(stored.elevation_min, stored.elevation_max);
+                    if confidence >= stored.confidence {
                         stored.semantic_class = semantic_class;
                         stored.confidence = confidence;
-                        changed_cells.push((
-                            cell.0,
-                            cell.1,
-                            point.z,
-                            resolution,
-                            semantic_class.as_str(),
-                            confidence,
-                        ));
+                    }
+                    if previous.elevation_min != stored.elevation_min
+                        || previous.elevation_max != stored.elevation_max
+                        || previous.point_count != stored.point_count
+                        || previous.semantic_class != stored.semantic_class
+                    {
+                        changed_cells.push(*stored);
                     }
                 }
                 Entry::Vacant(entry) => {
-                    entry.insert(SpatialCell {
-                        elevation: point.z,
+                    let stored = SpatialCell {
+                        grid_x: cell.0,
+                        grid_y: cell.1,
                         resolution,
+                        elevation_min: point.z,
+                        elevation_max: point.z,
+                        elevation_mean: point.z,
+                        elevation_sum: point.z,
+                        point_count: 1,
+                        terrain_class: terrain_for_cell(point.z, point.z),
                         semantic_class,
                         confidence,
-                    });
-                    changed_cells.push((
-                        cell.0,
-                        cell.1,
-                        point.z,
-                        resolution,
-                        semantic_class.as_str(),
-                        confidence,
-                    ));
+                    };
+                    entry.insert(stored);
+                    changed_cells.push(stored);
                 }
             }
         }
         self.dataset_offset = (self.dataset_offset + 1) % dataset_len;
+        self.objects = detect_objects(&self.points);
         if self
             .db_tx
             .try_send(DbCommand::SaveFrame {
                 frame: self.frame,
                 pose: self.pose,
                 cells: changed_cells,
+                objects: self.objects.clone(),
             })
             .is_err()
         {
@@ -349,7 +480,12 @@ async fn write_batch(
     let transaction = client.transaction().await?;
     for command in batch {
         match command {
-            DbCommand::SaveFrame { frame, pose, cells } => {
+            DbCommand::SaveFrame {
+                frame,
+                pose,
+                cells,
+                objects,
+            } => {
                 transaction
                     .execute(
                         "INSERT INTO mapping_frames
@@ -365,19 +501,58 @@ async fn write_batch(
                         ],
                     )
                     .await?;
-                for (gx, gy, elevation, resolution, class_name, confidence) in cells {
+                for cell in cells {
                     transaction
                         .execute(
                             "INSERT INTO spatial_cells
-                             (grid_x, grid_y, resolution_band, elevation, resolution, class_name, confidence)
-                             VALUES ($1, $2, $3, $4, $5, $6, $7)
+                             (grid_x, grid_y, resolution_band, elevation_min, elevation_max,
+                              elevation_mean, point_count, resolution, terrain_class, class_name, confidence)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                              ON CONFLICT (grid_x, grid_y, resolution_band)
-                             DO UPDATE SET elevation = EXCLUDED.elevation,
+                             DO UPDATE SET elevation_min = EXCLUDED.elevation_min,
+                                           elevation_max = EXCLUDED.elevation_max,
+                                           elevation_mean = EXCLUDED.elevation_mean,
+                                           point_count = EXCLUDED.point_count,
                                            resolution = EXCLUDED.resolution,
+                                           terrain_class = EXCLUDED.terrain_class,
                                            class_name = EXCLUDED.class_name,
                                            confidence = EXCLUDED.confidence,
                                            updated_at = CURRENT_TIMESTAMP",
-                            &[gx, gy, &((*resolution * 100.0) as i16), elevation, resolution, class_name, confidence],
+                            &[
+                                &cell.grid_x,
+                                &cell.grid_y,
+                                &((cell.resolution * 100.0) as i16),
+                                &cell.elevation_min,
+                                &cell.elevation_max,
+                                &cell.elevation_mean,
+                                &(cell.point_count as i32),
+                                &cell.resolution,
+                                &cell.terrain_class.as_str(),
+                                &cell.semantic_class.as_str(),
+                                &cell.confidence,
+                            ],
+                        )
+                        .await?;
+                }
+                for object in objects {
+                    transaction
+                        .execute(
+                            "INSERT INTO detected_objects
+                             (frame_id, object_id, class_name, x, y, z, width, length, height, confidence, dynamic)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                            &[
+                                &(*frame as i64),
+                                &(object.id as i64),
+                                &format!("{:?}", object.class).to_lowercase(),
+                                &object.x,
+                                &object.y,
+                                &object.z,
+                                &object.width,
+                                &object.length,
+                                &object.height,
+                                &object.confidence,
+                                &object.dynamic,
+                            ],
                         )
                         .await?;
                 }
@@ -439,13 +614,29 @@ impl App {
                 egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(82, 196, 164)),
             );
         }
-        for point in &self.engine.points {
-            let (sin_yaw, cos_yaw) = self.engine.pose.yaw.sin_cos();
-            let world_x = self.engine.pose.x + point.x * cos_yaw - point.y * sin_yaw;
-            let world_y = self.engine.pose.y + point.x * sin_yaw + point.y * cos_yaw;
-            let position = center + egui::vec2(world_x * scale, -world_y * scale);
-            let color = classify_point(*point).0.color();
-            painter.circle_filled(position, 1.8 + point.z * 0.35, color);
+        for cell in self.engine.map.values() {
+            let world_x = cell.grid_x as f32 * cell.resolution;
+            let world_y = cell.grid_y as f32 * cell.resolution;
+            let min = center + egui::vec2(world_x * scale, -(world_y + cell.resolution) * scale);
+            let cell_size = egui::vec2(
+                (cell.resolution * scale).max(1.5),
+                (cell.resolution * scale).max(1.5),
+            );
+            let mut color = cell.semantic_class.color();
+            if cell.terrain_class == TerrainClass::Drivable {
+                color = egui::Color32::from_rgba_unmultiplied(74, 222, 128, 150);
+            } else if cell.terrain_class == TerrainClass::NonDrivable {
+                color = egui::Color32::from_rgba_unmultiplied(251, 191, 36, 170);
+            }
+            painter.rect_filled(egui::Rect::from_min_size(min, cell_size), 0.0, color);
+        }
+        for object in &self.engine.objects {
+            let position = center + egui::vec2(object.x * scale, -object.y * scale);
+            painter.circle_stroke(
+                position,
+                (object.width.max(object.length) * scale).max(4.0),
+                egui::Stroke::new(1.5_f32, SemanticClass::StaticObstacle.color()),
+            );
         }
         let vehicle = center + egui::vec2(self.engine.pose.x * scale, -self.engine.pose.y * scale);
         painter.circle_filled(vehicle, 7.0, egui::Color32::from_rgb(245, 184, 74));
@@ -588,7 +779,7 @@ impl eframe::App for App {
             });
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Live tactical map");
-            ui.label("Position, scan returns, and vehicle trail");
+            ui.label("Local-coordinate 2.5D occupancy and elevation cells");
             ui.add_space(8.0);
             self.draw_map(ui);
         });
@@ -737,10 +928,17 @@ mod tests {
 
     #[test]
     fn grid_resolution_follows_foveation_bands() {
-        assert_eq!(resolution_for_range(10.0), RES_NEAR);
-        assert_eq!(resolution_for_range(10.01), RES_MID);
-        assert_eq!(resolution_for_range(30.0), RES_MID);
-        assert_eq!(resolution_for_range(30.01), RES_FAR);
+        assert_eq!(resolution_for_range(10.0), Some(RES_NEAR));
+        assert_eq!(resolution_for_range(10.01), Some(RES_MID));
+        assert_eq!(resolution_for_range(30.0), Some(RES_MID));
+        assert_eq!(resolution_for_range(30.01), Some(RES_FAR));
+        assert_eq!(resolution_for_range(100.01), None);
+    }
+
+    #[test]
+    fn terrain_uses_cell_height_range() {
+        assert_eq!(terrain_for_cell(0.1, 0.2), TerrainClass::Drivable);
+        assert_eq!(terrain_for_cell(0.1, 0.5), TerrainClass::NonDrivable);
     }
 
     #[test]

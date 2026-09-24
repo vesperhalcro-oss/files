@@ -8,15 +8,16 @@ returns, semantic terrain labels, and map reconstruction. The native prototype
 replays the checked-in LiDAR dataset at `foveated_lidar_gui/src/mock_lidar_stream.json`
 through the same foveated mapping pipeline used for live input.
 
-[![Live demo](https://img.shields.io/badge/live%20demo-Vercel-111827?logo=vercel)](https://vercel-hosting-setup-and-link.vercel.app/)
+[![Live demo](https://img.shields.io/badge/live%20demo-Vercel-111827?logo=vercel)](https://run-and-debug-setup.vercel.app/)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Version](https://img.shields.io/badge/version-0.1.0-22c55e)](foveated_lidar_gui/Cargo.toml)
 
 ## Explore the product
 
-Open the [live Tactical Mapper demo](https://vercel-hosting-setup-and-link.vercel.app/)
-to see a simulated LiDAR map, moving vehicle marker, scan returns, telemetry,
-pause/resume controls, and speed control in your browser.
+Open the [live Tactical Mapper demo](https://run-and-debug-setup.vercel.app/)
+to replay recorded LiDAR frames as a local-coordinate 2.5D occupancy/elevation
+map, with foveated cells, semantic terrain, separate objects, telemetry, and
+measured browser metrics.
 
 The Windows application provides the same workflow as a native desktop tool,
 with asynchronous PostgreSQL persistence on the local machine.
@@ -33,7 +34,7 @@ It builds the release binary, installs it for the current user, and creates a
 **Tactical Mapper** desktop shortcut. PostgreSQL must be running locally before
 launching the application; see [`db/README.md`](db/README.md).
 
-## Run the GUI and mock simulation
+## Run the GUI and LiDAR replay
 
 ### From the downloaded executable
 
@@ -53,10 +54,12 @@ The application stores mapping data in the configured PostgreSQL database.
 .\run_project.ps1
 ```
 
-The window starts with a checked-in LiDAR dataset replay, a moving vehicle, a
-semantic map, pause/resume, speed control, reset, and telemetry. Current
-semantic labels use explicit rule-based heuristics; trained perception models
-are not claimed or bundled.
+The window starts with a checked-in LiDAR dataset replay, a local-coordinate
+2.5D cell map, a moving vehicle, semantic terrain, separate static-object
+detections, pause/resume, speed control, reset, and telemetry. Each cell stores
+minimum, maximum, and mean elevation plus point count. Current semantic labels
+use explicit geometric/rule-based heuristics; trained perception models are not
+claimed or bundled.
 
 Or run directly:
 

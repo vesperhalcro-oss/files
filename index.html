@@ -6,7 +6,7 @@
     <title>Tactical Mapper</title>
     <meta
       name="description"
-      content="Tactical Mapper is a local Rust and egui application for visualizing simulated LiDAR mapping and telemetry."
+      content="Tactical Mapper is a local Rust and egui application for visualizing local-coordinate LiDAR occupancy, elevation, and telemetry."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -81,6 +81,7 @@
             <div class="app-toolbar">
               <div class="toolbar-actions">
                 <button class="app-button primary" id="toggle-simulation" type="button">Pause</button>
+                <button class="app-button" id="start-replay" type="button">Start LiDAR replay</button>
                 <button class="app-button" id="reset-simulation" type="button">Reset</button>
               </div>
               <label class="speed-control" for="simulation-speed">
@@ -91,7 +92,7 @@
             </div>
             <div class="app-grid">
               <div class="live-map-card">
-                <canvas id="lidar-map" aria-label="Live simulated LiDAR map"></canvas>
+                <canvas id="lidar-map" aria-label="Local-coordinate LiDAR 2.5D occupancy and elevation map"></canvas>
               </div>
               <aside class="telemetry-panel">
                 <p class="panel-label">Telemetry</p>
@@ -99,7 +100,8 @@
                 <div class="telemetry-stat"><span>Frame</span><strong id="telemetry-frame">0</strong></div>
                 <div class="telemetry-stat"><span>Position</span><strong id="telemetry-position">0.0, 0.0</strong></div>
                 <div class="telemetry-stat"><span>Yaw</span><strong id="telemetry-yaw">0.0°</strong></div>
-                <div class="telemetry-stat"><span>Points</span><strong id="telemetry-points">240</strong></div>
+                <div class="telemetry-stat"><span>Raw points</span><strong id="telemetry-points">0</strong></div>
+                <div class="telemetry-stat"><span>Objects</span><strong id="telemetry-objects">0</strong></div>
                 <div class="telemetry-stat"><span>Storage</span><strong id="telemetry-storage">PostgreSQL · local</strong></div>
               </aside>
             </div>
@@ -149,10 +151,10 @@
               </p>
             </article>
             <article class="info-card">
-              <h3>Live map</h3>
+              <h3>Local 2.5D map</h3>
               <p>
-                Updates the visualized environment as the vehicle moves, helping
-                track path, occupancy, and throughput locally without external services.
+                Draws aggregated occupancy/elevation cells in the vehicle's local
+                coordinate frame; it is not a geographic basemap.
               </p>
             </article>
             <article class="info-card">
