@@ -329,47 +329,69 @@ fn update_cell_statistics(
     }
 }
 
-fn detect_objects(points: &[LidarPoint]) -> Vec<DetectedObject> {
-    let elevated: Vec<_> = points.iter().filter(|point| point.z > 1.6).collect();
-    if elevated.is_empty() {
-        return Vec::new();
+fn detect_objects(points: &[LidarPoint], previous: &[DetectedObject]) -> Vec<DetectedObject> {
+    let elevated: Vec<LidarPoint> = points.iter().copied().filter(|point| point.z > 1.6).collect();
+    let mut visited = vec![false; elevated.len()];
+    let mut objects = Vec::new();
+
+    for start in 0..elevated.len() {
+        if visited[start] {
+            continue;
+        }
+        visited[start] = true;
+        let mut cluster = vec![elevated[start]];
+        let mut frontier = vec![start];
+        while let Some(index) = frontier.pop() {
+            for candidate in 0..elevated.len() {
+                if visited[candidate] {
+                    continue;
+                }
+                let dx = elevated[index].x - elevated[candidate].x;
+                let dy = elevated[index].y - elevated[candidate].y;
+                if dx.hypot(dy) <= 1.5 {
+                    visited[candidate] = true;
+                    frontier.push(candidate);
+                    cluster.push(elevated[candidate]);
+                }
+            }
+        }
+        if cluster.len() < 2 {
+            continue;
+        }
+
+        let min_x = cluster.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
+        let max_x = cluster.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);
+        let min_y = cluster.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
+        let max_y = cluster.iter().map(|point| point.y).fold(f32::NEG_INFINITY, f32::max);
+        let min_z = cluster.iter().map(|point| point.z).fold(f32::INFINITY, f32::min);
+        let max_z = cluster.iter().map(|point| point.z).fold(f32::NEG_INFINITY, f32::max);
+        let x = (min_x + max_x) / 2.0;
+        let y = (min_y + max_y) / 2.0;
+        let id = previous
+            .iter()
+            .filter(|object| (object.x - x).hypot(object.y - y) <= 3.0)
+            .min_by(|left, right| {
+                (left.x - x)
+                    .hypot(left.y - y)
+                    .partial_cmp(&(right.x - x).hypot(right.y - y))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|object| object.id)
+            .unwrap_or_else(|| previous.iter().map(|object| object.id).max().unwrap_or(0) + objects.len() as u64 + 1);
+        objects.push(DetectedObject {
+            id,
+            class: ObjectClass::StaticObstacle,
+            x,
+            y,
+            z: (min_z + max_z) / 2.0,
+            width: (max_x - min_x).max(0.1),
+            length: (max_y - min_y).max(0.1),
+            height: (max_z - min_z).max(0.1),
+            confidence: (0.55 + cluster.len() as f32 / 100.0).min(0.95),
+            dynamic: false,
+        });
     }
-    let min_x = elevated
-        .iter()
-        .map(|point| point.x)
-        .fold(f32::INFINITY, f32::min);
-    let max_x = elevated
-        .iter()
-        .map(|point| point.x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = elevated
-        .iter()
-        .map(|point| point.y)
-        .fold(f32::INFINITY, f32::min);
-    let max_y = elevated
-        .iter()
-        .map(|point| point.y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_z = elevated
-        .iter()
-        .map(|point| point.z)
-        .fold(f32::INFINITY, f32::min);
-    let max_z = elevated
-        .iter()
-        .map(|point| point.z)
-        .fold(f32::NEG_INFINITY, f32::max);
-    vec![DetectedObject {
-        id: 1,
-        class: ObjectClass::StaticObstacle,
-        x: (min_x + max_x) / 2.0,
-        y: (min_y + max_y) / 2.0,
-        z: (min_z + max_z) / 2.0,
-        width: max_x - min_x,
-        length: max_y - min_y,
-        height: max_z - min_z,
-        confidence: 0.61,
-        dynamic: false,
-    }]
+    objects
 }
 
 #[derive(Debug, Clone)]
@@ -516,7 +538,7 @@ impl Engine {
             }
         }
         self.dataset_offset = (self.dataset_offset + 1) % dataset_len;
-        self.objects = detect_objects(&self.points);
+        self.objects = detect_objects(&self.points, &self.objects);
         if self
             .db_tx
             .try_send(DbCommand::SaveFrame {
@@ -1086,5 +1108,25 @@ mod tests {
             .0,
             SemanticClass::StaticObstacle
         );
+    }
+
+    #[test]
+    fn object_clusters_receive_stable_ids() {
+        let first = vec![
+            LidarPoint { x: 1.0, y: 1.0, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 1.4, y: 1.1, z: 2.2, intensity: 0.5 },
+            LidarPoint { x: 8.0, y: 8.0, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 8.3, y: 8.2, z: 2.1, intensity: 0.5 },
+        ];
+        let objects = detect_objects(&first, &[]);
+        assert_eq!(objects.len(), 2);
+        let second = vec![
+            LidarPoint { x: 1.2, y: 1.1, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 1.5, y: 1.2, z: 2.2, intensity: 0.5 },
+            LidarPoint { x: 8.2, y: 8.1, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 8.5, y: 8.3, z: 2.1, intensity: 0.5 },
+        ];
+        let updated = detect_objects(&second, &objects);
+        assert_eq!(updated.iter().map(|object| object.id).collect::<Vec<_>>(), objects.iter().map(|object| object.id).collect::<Vec<_>>());
     }
 }
