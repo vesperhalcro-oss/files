@@ -9,6 +9,13 @@ const frameValue = document.querySelector("#telemetry-frame");
 const positionValue = document.querySelector("#telemetry-position");
 const yawValue = document.querySelector("#telemetry-yaw");
 const pointsValue = document.querySelector("#telemetry-points");
+const objectsValue = document.querySelector("#telemetry-objects");
+const replayButton = document.querySelector("#start-replay");
+const ids = (prefix) => Object.fromEntries(["drivable", "nondrivable", "static", "dynamic", "near", "mid", "far", "cells", "fps", "latency", "point-rate", "queue"].map((name) => [name, document.querySelector(`#${prefix}-${name}`)]));
+const semanticValues = ids("semantic");
+const zoneValues = ids("zone");
+const metricValues = ids("metric");
+const cellsValue = document.querySelector("#telemetry-cells");
 
 const state = {
   running: true,
@@ -17,7 +24,39 @@ const state = {
   time: 0,
   pose: { x: 0, y: 0, yaw: 0 },
   trail: [],
+  lastFrameTime: 0,
+  fps: 0,
+  latency: 0,
+  frameInterval: 16.7,
+  queue: 0,
+  replayFrames: [],
+  replayIndex: 0,
+  replayLoaded: false,
+  currentFrame: { raw_point_count: 0, pose: { x: 0, y: 0, yaw: 0 }, cells: [], objects: [] },
 };
+
+async function loadReplay() {
+  const frames = await Promise.all([1, 2].map(async (number) => {
+    const response = await fetch(`./demo/frame_${String(number).padStart(4, "0")}.json`);
+    if (!response.ok) throw new Error(`Replay frame ${number} failed to load`);
+    return response.json();
+  }));
+  state.replayFrames = frames;
+  state.replayLoaded = true;
+  state.currentFrame = frames[0];
+  state.frame = 1;
+  updateTelemetry();
+  draw();
+}
+
+function applyReplayFrame() {
+  const frame = state.replayFrames[state.replayIndex % state.replayFrames.length];
+  state.currentFrame = frame;
+  state.pose = { ...frame.pose };
+  state.frame = state.replayIndex + 1;
+  state.trail.push([state.pose.x, state.pose.y]);
+  if (state.trail.length > 2048) state.trail.shift();
+}
 
 function resizeCanvas() {
   const ratio = window.devicePixelRatio || 1;
@@ -33,7 +72,22 @@ function updateTelemetry() {
   frameValue.textContent = state.frame.toLocaleString();
   positionValue.textContent = `${state.pose.x.toFixed(1)}, ${state.pose.y.toFixed(1)}`;
   yawValue.textContent = `${(state.pose.yaw * 180 / Math.PI).toFixed(1)}°`;
-  pointsValue.textContent = "240";
+  const cells = state.currentFrame.cells;
+  const semanticCount = (className) => cells.filter((cell) => cell.semantic_class === className).length;
+  pointsValue.textContent = (state.currentFrame.raw_point_count || 0).toLocaleString();
+  objectsValue.textContent = state.currentFrame.objects.length.toLocaleString();
+  cellsValue.textContent = cells.length.toLocaleString();
+  semanticValues.drivable.textContent = semanticCount("drivable_terrain");
+  semanticValues.nondrivable.textContent = cells.filter((cell) => cell.terrain === "non_drivable").length;
+  semanticValues.static.textContent = cells.filter((cell) => ["wall", "barrier", "static_obstacle"].includes(cell.semantic_class)).length;
+  semanticValues.dynamic.textContent = cells.filter((cell) => ["pedestrian", "vehicle", "cyclist", "other_dynamic"].includes(cell.semantic_class)).length;
+  zoneValues.near.textContent = cells.filter((cell) => cell.resolution === 0.05).length;
+  zoneValues.mid.textContent = cells.filter((cell) => cell.resolution === 0.1).length;
+  zoneValues.far.textContent = cells.filter((cell) => cell.resolution === 0.5).length;
+  metricValues.fps.textContent = state.fps.toFixed(1);
+  metricValues.latency.textContent = `${state.latency.toFixed(2)} ms`;
+  metricValues["point-rate"].textContent = `${Math.round(240 / Math.max(state.frameInterval / 1000, 0.001)).toLocaleString()}/s`;
+  metricValues.queue.textContent = `demo · ${state.queue} pending`;
 }
 
 function draw() {
@@ -69,14 +123,31 @@ function draw() {
   });
   context.stroke();
 
-  for (let index = 0; index < 240; index += 1) {
-    const angle = index * Math.PI * 2 / 240;
-    const range = 8 + Math.sin(angle * 3 + state.time) * 2 + Math.abs(Math.cos(angle * 11 - state.time * 0.7)) * 1.5;
-    const worldX = state.pose.x + range * Math.cos(angle + state.pose.yaw);
-    const worldY = state.pose.y + range * Math.sin(angle + state.pose.yaw);
-    const intensity = 0.5 + 0.5 * Math.sin(angle * 5 + state.time);
-    context.fillStyle = `rgba(125, 211, 252, ${0.25 + intensity * 0.7})`;
-    context.fillRect(centerX + worldX * scale, centerY - worldY * scale, 2, 2);
+  for (const cell of state.currentFrame.cells) {
+    const worldX = cell.grid_x * cell.resolution;
+    const worldY = cell.grid_y * cell.resolution;
+    const color = cell.terrain === "drivable" ? "#4ade80" : "#fbbf24";
+    const alpha = Math.min(0.95, 0.35 + cell.confidence * 0.6);
+    context.fillStyle = color;
+    context.globalAlpha = alpha;
+    const cellSize = Math.max(cell.resolution * scale, 3);
+    context.fillRect(centerX + worldX * scale, centerY - worldY * scale - cellSize, cellSize, cellSize);
+    if (["wall", "barrier", "static_obstacle"].includes(cell.semantic_class)) {
+      context.strokeStyle = "#fb7185";
+      context.strokeRect(centerX + worldX * scale, centerY - worldY * scale - cellSize, cellSize, cellSize);
+    }
+  }
+  context.globalAlpha = 1;
+
+  for (const object of state.currentFrame.objects) {
+    context.strokeStyle = object.dynamic ? "#c084fc" : "#fb7185";
+    context.lineWidth = 2;
+    context.strokeRect(
+      centerX + (object.x - object.width / 2) * scale,
+      centerY - (object.y + object.length / 2) * scale,
+      object.width * scale,
+      object.length * scale,
+    );
   }
 
   context.save();
@@ -100,14 +171,17 @@ function step(timestamp) {
   const delta = Math.min((timestamp - state.lastTimestamp) / 1000, 0.1);
   state.lastTimestamp = timestamp;
   if (state.running) {
+    const frameStart = performance.now();
     const simulationDelta = delta * state.speed;
     state.time += simulationDelta;
-    state.pose.yaw += 0.01 * simulationDelta;
-    state.pose.x += 0.5 * simulationDelta * Math.cos(state.pose.yaw);
-    state.pose.y += 0.5 * simulationDelta * Math.sin(state.pose.yaw);
-    state.trail.push([state.pose.x, state.pose.y]);
-    if (state.trail.length > 2048) state.trail.shift();
-    state.frame += 1;
+    if (state.replayLoaded) {
+      state.replayIndex += 1;
+      applyReplayFrame();
+    }
+    state.latency = performance.now() - frameStart;
+    state.frameInterval = delta * 1000;
+    state.fps = delta > 0 ? 1 / delta : 0;
+    state.queue = 0;
     updateTelemetry();
   }
   draw();
@@ -125,7 +199,25 @@ resetButton.addEventListener("click", () => {
   state.time = 0;
   state.pose = { x: 0, y: 0, yaw: 0 };
   state.trail = [];
+  state.replayIndex = 0;
+  if (state.replayLoaded) applyReplayFrame();
   updateTelemetry();
+});
+
+replayButton.addEventListener("click", async () => {
+  replayButton.disabled = true;
+  replayButton.textContent = "Loading replay…";
+  try {
+    if (!state.replayLoaded) await loadReplay();
+    state.running = true;
+    toggleButton.textContent = "Pause";
+    replayButton.textContent = "Replay loaded";
+  } catch (error) {
+    replayButton.textContent = "Replay unavailable";
+    statusValue.textContent = error.message;
+  } finally {
+    replayButton.disabled = false;
+  }
 });
 
 speedInput.addEventListener("input", () => {
@@ -136,4 +228,7 @@ speedInput.addEventListener("input", () => {
 window.addEventListener("resize", resizeCanvas);
 updateTelemetry();
 resizeCanvas();
+loadReplay().catch(() => {
+  replayButton.textContent = "Start LiDAR replay";
+});
 requestAnimationFrame(step);

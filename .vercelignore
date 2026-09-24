@@ -8,3 +8,5 @@ dist/
 *.sql
 *.py
 *.json
+!demo/
+!demo/*.json

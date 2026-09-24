@@ -6,7 +6,7 @@
     <title>Tactical Mapper</title>
     <meta
       name="description"
-      content="Tactical Mapper is a local Rust and egui application for visualizing simulated LiDAR mapping and telemetry."
+      content="Tactical Mapper is a local Rust and egui application for visualizing local-coordinate LiDAR occupancy, elevation, and telemetry."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -27,6 +27,7 @@
         <nav class="nav">
           <a href="#overview">Overview</a>
           <a href="#features">Features</a>
+          <a href="#architecture">Architecture</a>
           <a href="#run">Run</a>
         </nav>
       </header>
@@ -80,6 +81,7 @@
             <div class="app-toolbar">
               <div class="toolbar-actions">
                 <button class="app-button primary" id="toggle-simulation" type="button">Pause</button>
+                <button class="app-button" id="start-replay" type="button">Start LiDAR replay</button>
                 <button class="app-button" id="reset-simulation" type="button">Reset</button>
               </div>
               <label class="speed-control" for="simulation-speed">
@@ -90,7 +92,7 @@
             </div>
             <div class="app-grid">
               <div class="live-map-card">
-                <canvas id="lidar-map" aria-label="Live simulated LiDAR map"></canvas>
+                <canvas id="lidar-map" aria-label="Local-coordinate LiDAR 2.5D occupancy and elevation map"></canvas>
               </div>
               <aside class="telemetry-panel">
                 <p class="panel-label">Telemetry</p>
@@ -98,8 +100,39 @@
                 <div class="telemetry-stat"><span>Frame</span><strong id="telemetry-frame">0</strong></div>
                 <div class="telemetry-stat"><span>Position</span><strong id="telemetry-position">0.0, 0.0</strong></div>
                 <div class="telemetry-stat"><span>Yaw</span><strong id="telemetry-yaw">0.0°</strong></div>
-                <div class="telemetry-stat"><span>Points</span><strong id="telemetry-points">240</strong></div>
+                <div class="telemetry-stat"><span>Raw points</span><strong id="telemetry-points">0</strong></div>
+                <div class="telemetry-stat"><span>Objects</span><strong id="telemetry-objects">0</strong></div>
+                <div class="telemetry-stat"><span>Storage</span><strong id="telemetry-storage">PostgreSQL · local</strong></div>
               </aside>
+            </div>
+            <div class="dashboard-grid">
+              <section class="dashboard-card">
+                <p class="panel-label">Perception</p>
+                <div class="metric-list">
+                  <div><span>Drivable terrain</span><strong id="semantic-drivable">0</strong></div>
+                  <div><span>Non-drivable</span><strong id="semantic-nondrivable">0</strong></div>
+                  <div><span>Static obstacles</span><strong id="semantic-static">0</strong></div>
+                  <div><span>Dynamic objects</span><strong id="semantic-dynamic">0</strong></div>
+                </div>
+              </section>
+              <section class="dashboard-card">
+                <p class="panel-label">Foveated mapping</p>
+                <div class="metric-list">
+                  <div><span>0–10 m · 5 cm</span><strong id="zone-near">0</strong></div>
+                  <div><span>10–30 m · 10 cm</span><strong id="zone-mid">0</strong></div>
+                  <div><span>30–100 m · 50 cm</span><strong id="zone-far">0</strong></div>
+                  <div><span>2.5D cells</span><strong id="telemetry-cells">0</strong></div>
+                </div>
+              </section>
+              <section class="dashboard-card">
+                <p class="panel-label">Measured performance</p>
+                <div class="metric-list">
+                  <div><span>Browser FPS</span><strong id="metric-fps">0</strong></div>
+                  <div><span>Frame latency</span><strong id="metric-latency">0 ms</strong></div>
+                  <div><span>Point rate</span><strong id="metric-point-rate">0/s</strong></div>
+                  <div><span>Queue</span><strong id="metric-queue">0 pending</strong></div>
+                </div>
+              </section>
             </div>
           </div>
         </section>
@@ -111,24 +144,24 @@
           </div>
           <div class="info-grid">
             <article class="info-card">
-              <h3>Mock LiDAR stream</h3>
+                <h3>Dataset replay</h3>
               <p>
-                Simulates a moving vehicle and live scan data to demonstrate how a
-                foveated mapping system could interpret range and motion cues.
+                Replays a checked-in point cloud through the same foveated mapping
+                path used by the native prototype.
               </p>
             </article>
             <article class="info-card">
-              <h3>Live map</h3>
+              <h3>Local 2.5D map</h3>
               <p>
-                Updates the visualized environment as the vehicle moves, helping
-                track path, occupancy, and throughput locally without external services.
+                Draws aggregated occupancy/elevation cells in the vehicle's local
+                coordinate frame; it is not a geographic basemap.
               </p>
             </article>
             <article class="info-card">
-              <h3>Embedded SQLite</h3>
+                <h3>Local PostgreSQL</h3>
               <p>
-                Stores telemetry and event data in a local database so the project
-                remains portable and self-contained on a Windows workstation.
+                Persists frames and semantic 2.5D cells asynchronously to a local
+                PostgreSQL instance without blocking rendering.
               </p>
             </article>
           </div>
@@ -145,8 +178,23 @@
             <li>Reset state</li>
             <li>Telemetry panel</li>
             <li>Local map rendering</li>
-            <li>SQLite persistence</li>
+            <li>PostgreSQL persistence</li>
+            <li>Terrain and obstacle semantics</li>
+            <li>Measured browser metrics</li>
           </ul>
+        </section>
+
+        <section id="architecture" class="content-section">
+         <div class="section-heading">
+           <p class="eyebrow">Architecture</p>
+           <h2>From point cloud to semantic 2.5D map</h2>
+         </div>
+         <div class="architecture-flow" aria-label="Tactical Mapper processing pipeline">
+           <span>LiDAR / demo cloud</span><b>↓</b><span>Preprocessing</span><b>↓</b>
+           <span>Semantic perception</span><b>↓</b><span>LiDAR + IMU odometry</span>
+           <b>↓</b><span>Foveated grid: 5 cm / 10 cm / 50 cm</span><b>↓</b>
+           <span>PostgreSQL</span><b>↓</b><span>egui tactical dashboard</span>
+         </div>
         </section>
 
         <section id="run" class="content-section run-section">

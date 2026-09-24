@@ -5,8 +5,7 @@
 .DESCRIPTION
     Single-step replacement for build_windows.ps1 + install_windows.ps1.
     Compiles the release binary, installs it under %LOCALAPPDATA%,
-    and creates a desktop shortcut. No PostgreSQL, Python, or manual
-    steps required - the app manages its own embedded SQLite database.
+    and creates a desktop shortcut. PostgreSQL setup is documented in db\README.md.
 
 .USAGE
     .\setup.ps1
@@ -70,4 +69,4 @@ Write-Host ""
 Write-Host "$AppName installed successfully." -ForegroundColor Green
 Write-Host "  Executable: $installedPath"
 Write-Host "  Shortcut:   Desktop\$AppName.lnk"
-Write-Host "  Database:   %LOCALAPPDATA%\TacticalMapper\tactical_mapper.sqlite3 (created on first run)"
+Write-Host "  Database:   PostgreSQL at 127.0.0.1:5432 (see db\README.md)"

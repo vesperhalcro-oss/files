@@ -1,13 +1,14 @@
 use eframe::egui;
-use rusqlite::{params, Connection};
+use serde::Deserialize;
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::time::Instant;
+use tokio::sync::mpsc;
+use tokio_postgres::NoTls;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Pose3D {
@@ -15,6 +16,165 @@ struct Pose3D {
     y: f32,
     z: f32,
     yaw: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticClass {
+    Unknown,
+    DrivableTerrain,
+    NonDrivableTerrain,
+    Wall,
+    Pole,
+    Barrier,
+    StaticObstacle,
+    Pedestrian,
+    Vehicle,
+    OtherDynamic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerrainClass {
+    Unknown,
+    Drivable,
+    NonDrivable,
+}
+
+impl TerrainClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Drivable => "drivable",
+            Self::NonDrivable => "non_drivable",
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObjectClass {
+    Wall,
+    Pole,
+    Barrier,
+    StaticObstacle,
+    Pedestrian,
+    Vehicle,
+    Cyclist,
+    OtherDynamic,
+}
+
+impl SemanticClass {
+    const ALL: [Self; 10] = [
+        Self::Unknown,
+        Self::DrivableTerrain,
+        Self::NonDrivableTerrain,
+        Self::Wall,
+        Self::Pole,
+        Self::Barrier,
+        Self::StaticObstacle,
+        Self::Pedestrian,
+        Self::Vehicle,
+        Self::OtherDynamic,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::DrivableTerrain => "drivable_terrain",
+            Self::NonDrivableTerrain => "non_drivable_terrain",
+            Self::Wall => "wall",
+            Self::Pole => "pole",
+            Self::Barrier => "barrier",
+            Self::StaticObstacle => "static_obstacle",
+            Self::Pedestrian => "pedestrian",
+            Self::Vehicle => "vehicle",
+            Self::OtherDynamic => "other_dynamic",
+        }
+    }
+
+    fn color(self) -> egui::Color32 {
+        match self {
+            Self::DrivableTerrain => egui::Color32::from_rgb(95, 190, 130),
+            Self::NonDrivableTerrain => egui::Color32::from_rgb(185, 145, 85),
+            Self::Wall | Self::Barrier | Self::StaticObstacle => {
+                egui::Color32::from_rgb(220, 115, 90)
+            }
+            Self::Pole => egui::Color32::from_rgb(175, 135, 225),
+            Self::Pedestrian | Self::Vehicle | Self::OtherDynamic => {
+                egui::Color32::from_rgb(240, 90, 150)
+            }
+            Self::Unknown => egui::Color32::from_rgb(150, 165, 165),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpatialCell {
+    grid_x: i32,
+    grid_y: i32,
+    resolution: f32,
+    elevation_min: f32,
+    elevation_max: f32,
+    elevation_mean: f32,
+    elevation_sum: f32,
+    point_count: u32,
+    terrain_class: TerrainClass,
+    semantic_class: SemanticClass,
+    confidence: f32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct DetectedObject {
+    id: u64,
+    class: ObjectClass,
+    x: f32,
+    y: f32,
+    z: f32,
+    width: f32,
+    length: f32,
+    height: f32,
+    confidence: f32,
+    dynamic: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DatasetPoint {
+    x: f32,
+    y: f32,
+    z: f32,
+    intensity: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DatasetFrame {
+    lidar_scan: Vec<DatasetPoint>,
+}
+
+fn load_dataset() -> Vec<LidarPoint> {
+    let dataset: DatasetFrame = serde_json::from_str(include_str!("mock_lidar_stream.json"))
+        .expect("mock LiDAR dataset must be valid JSON");
+    dataset
+        .lidar_scan
+        .into_iter()
+        .map(|point| LidarPoint {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+            intensity: point.intensity,
+        })
+        .collect()
+}
+
+fn classify_point(point: LidarPoint) -> (SemanticClass, f32) {
+    if point.z < 0.75 {
+        (SemanticClass::DrivableTerrain, 0.82)
+    } else if point.z < 1.1 && point.intensity > 0.7 {
+        (SemanticClass::Barrier, 0.68)
+    } else if point.z > 1.6 {
+        (SemanticClass::StaticObstacle, 0.61)
+    } else {
+        (SemanticClass::NonDrivableTerrain, 0.55)
+    }
 }
 
 impl Pose3D {
@@ -43,15 +203,73 @@ fn update_dead_reckoning(pose: &mut Pose3D, acceleration: f32, gyro: f32, dt: f3
 const RES_NEAR: f32 = 0.05;
 const RES_MID: f32 = 0.10;
 const RES_FAR: f32 = 0.50;
+const DB_CHANNEL_CAPACITY: usize = 4096;
 
-fn resolution_for_range(range: f32) -> f32 {
-    if range <= 10.0 {
-        RES_NEAR
-    } else if range <= 30.0 {
-        RES_MID
-    } else {
-        RES_FAR
+fn resolution_for_range(range: f32) -> Option<f32> {
+    if !range.is_finite() || range > 100.0 {
+        return None;
     }
+    if range <= 10.0 {
+        Some(RES_NEAR)
+    } else if range <= 30.0 {
+        Some(RES_MID)
+    } else {
+        Some(RES_FAR)
+    }
+}
+
+fn terrain_for_cell(elevation_min: f32, elevation_max: f32) -> TerrainClass {
+    if !elevation_min.is_finite() || !elevation_max.is_finite() {
+        return TerrainClass::Unknown;
+    }
+    if elevation_max - elevation_min <= 0.30 {
+        TerrainClass::Drivable
+    } else {
+        TerrainClass::NonDrivable
+    }
+}
+
+fn detect_objects(points: &[LidarPoint]) -> Vec<DetectedObject> {
+    let elevated: Vec<_> = points.iter().filter(|point| point.z > 1.6).collect();
+    if elevated.is_empty() {
+        return Vec::new();
+    }
+    let min_x = elevated
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = elevated
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = elevated
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min);
+    let max_y = elevated
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_z = elevated
+        .iter()
+        .map(|point| point.z)
+        .fold(f32::INFINITY, f32::min);
+    let max_z = elevated
+        .iter()
+        .map(|point| point.z)
+        .fold(f32::NEG_INFINITY, f32::max);
+    vec![DetectedObject {
+        id: 1,
+        class: ObjectClass::StaticObstacle,
+        x: (min_x + max_x) / 2.0,
+        y: (min_y + max_y) / 2.0,
+        z: (min_z + max_z) / 2.0,
+        width: max_x - min_x,
+        length: max_y - min_y,
+        height: max_z - min_z,
+        confidence: 0.61,
+        dynamic: false,
+    }]
 }
 
 #[derive(Debug, Clone)]
@@ -59,24 +277,28 @@ enum DbCommand {
     SaveFrame {
         frame: u64,
         pose: Pose3D,
-        cells: Vec<(i32, i32, f32, f32)>,
+        cells: Vec<SpatialCell>,
+        objects: Vec<DetectedObject>,
     },
 }
 
 struct Engine {
     pose: Pose3D,
-    map: HashMap<(i32, i32), (f32, f32)>,
+    map: HashMap<(i32, i32, u8), SpatialCell>,
     points: Vec<LidarPoint>,
     trail: VecDeque<(f32, f32)>,
     frame: u64,
     simulation_time: f32,
     start: Instant,
-    db_tx: mpsc::SyncSender<DbCommand>,
+    db_tx: mpsc::Sender<DbCommand>,
     storage_ok: Arc<AtomicBool>,
+    dataset: Vec<LidarPoint>,
+    dataset_offset: usize,
+    objects: Vec<DetectedObject>,
 }
 
 impl Engine {
-    fn new(db_tx: mpsc::SyncSender<DbCommand>, storage_ok: Arc<AtomicBool>) -> Self {
+    fn new(db_tx: mpsc::Sender<DbCommand>, storage_ok: Arc<AtomicBool>) -> Self {
         Self {
             pose: Pose3D::default(),
             map: HashMap::with_capacity(4096),
@@ -87,6 +309,9 @@ impl Engine {
             start: Instant::now(),
             db_tx,
             storage_ok,
+            dataset: load_dataset(),
+            dataset_offset: 0,
+            objects: Vec::new(),
         }
     }
 
@@ -95,6 +320,7 @@ impl Engine {
         self.map.clear();
         self.points.clear();
         self.trail.clear();
+        self.objects.clear();
         self.frame = 0;
         self.simulation_time = 0.0;
         self.start = Instant::now();
@@ -110,49 +336,90 @@ impl Engine {
         }
 
         self.points.clear();
+        let dataset_len = self.dataset.len();
         let mut changed_cells = Vec::new();
-        for index in 0..240 {
-            let angle = index as f32 * std::f32::consts::TAU / 240.0;
-            let range = 8.0
-                + (angle * 3.0 + self.simulation_time).sin() * 2.0
-                + (angle * 11.0 - self.simulation_time * 0.7).cos().abs() * 1.5;
-            let intensity =
-                (0.5 + 0.5 * (angle * 5.0 + self.simulation_time).sin()).clamp(0.0, 1.0);
+        for index in 0..dataset_len {
+            let dataset_point = self.dataset[(self.dataset_offset + index) % dataset_len];
             let point = LidarPoint {
-                x: range * angle.cos(),
-                y: range * angle.sin(),
-                z: 0.5 + intensity,
-                intensity,
+                x: dataset_point.x * 0.12,
+                y: dataset_point.y * 0.12,
+                z: dataset_point.z,
+                intensity: dataset_point.intensity,
             };
+            if !point.x.is_finite()
+                || !point.y.is_finite()
+                || !point.z.is_finite()
+                || point.x.hypot(point.y) > 100.0
+            {
+                continue;
+            }
             self.points.push(point);
 
             let (sin_yaw, cos_yaw) = self.pose.yaw.sin_cos();
             let world_x = self.pose.x + point.x * cos_yaw - point.y * sin_yaw;
             let world_y = self.pose.y + point.x * sin_yaw + point.y * cos_yaw;
-            let resolution = resolution_for_range(range);
+            let range = point.x.hypot(point.y);
+            let Some(resolution) = resolution_for_range(range) else {
+                continue;
+            };
+            let resolution_band = (resolution * 100.0) as u8;
+            let (semantic_class, confidence) = classify_point(point);
             let cell = (
                 (world_x / resolution).floor() as i32,
                 (world_y / resolution).floor() as i32,
             );
-            match self.map.entry(cell) {
+            let key = (cell.0, cell.1, resolution_band);
+            match self.map.entry(key) {
                 Entry::Occupied(mut entry) => {
-                    if point.z > entry.get().0 {
-                        entry.get_mut().0 = point.z;
-                        changed_cells.push((cell.0, cell.1, point.z, resolution));
+                    let stored = entry.get_mut();
+                    let previous = *stored;
+                    stored.elevation_min = stored.elevation_min.min(point.z);
+                    stored.elevation_max = stored.elevation_max.max(point.z);
+                    stored.elevation_sum += point.z;
+                    stored.point_count += 1;
+                    stored.elevation_mean = stored.elevation_sum / stored.point_count as f32;
+                    stored.terrain_class =
+                        terrain_for_cell(stored.elevation_min, stored.elevation_max);
+                    if confidence >= stored.confidence {
+                        stored.semantic_class = semantic_class;
+                        stored.confidence = confidence;
+                    }
+                    if previous.elevation_min != stored.elevation_min
+                        || previous.elevation_max != stored.elevation_max
+                        || previous.point_count != stored.point_count
+                        || previous.semantic_class != stored.semantic_class
+                    {
+                        changed_cells.push(*stored);
                     }
                 }
                 Entry::Vacant(entry) => {
-                    entry.insert((point.z, resolution));
-                    changed_cells.push((cell.0, cell.1, point.z, resolution));
+                    let stored = SpatialCell {
+                        grid_x: cell.0,
+                        grid_y: cell.1,
+                        resolution,
+                        elevation_min: point.z,
+                        elevation_max: point.z,
+                        elevation_mean: point.z,
+                        elevation_sum: point.z,
+                        point_count: 1,
+                        terrain_class: terrain_for_cell(point.z, point.z),
+                        semantic_class,
+                        confidence,
+                    };
+                    entry.insert(stored);
+                    changed_cells.push(stored);
                 }
             }
         }
+        self.dataset_offset = (self.dataset_offset + 1) % dataset_len;
+        self.objects = detect_objects(&self.points);
         if self
             .db_tx
-            .send(DbCommand::SaveFrame {
+            .try_send(DbCommand::SaveFrame {
                 frame: self.frame,
                 pose: self.pose,
                 cells: changed_cells,
+                objects: self.objects.clone(),
             })
             .is_err()
         {
@@ -162,73 +429,137 @@ impl Engine {
     }
 }
 
-fn database_path() -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-    let data_root = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "A local data directory is not available",
-            )
-        })?;
-    let data_dir = PathBuf::from(data_root).join("TacticalMapper");
-    std::fs::create_dir_all(&data_dir)?;
-    Ok(data_dir.join("tactical_mapper.sqlite3"))
+fn connection_string() -> String {
+    std::env::var("TACTICAL_MAPPER_DB_URL").unwrap_or_else(|_| {
+        "host=127.0.0.1 port=5432 user=postgres dbname=tactical_mapper_db".to_string()
+    })
 }
 
-fn run_db_worker(
-    rx: mpsc::Receiver<DbCommand>,
+async fn run_db_worker(
+    mut rx: mpsc::Receiver<DbCommand>,
     storage_ok: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let connection = Connection::open(database_path()?)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS vehicle_poses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            frame_id INTEGER NOT NULL,
-            pos_x REAL NOT NULL,
-            pos_y REAL NOT NULL,
-            pos_z REAL NOT NULL,
-            yaw REAL NOT NULL,
-            recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS grid_map_cells (
-            grid_x INTEGER NOT NULL,
-            grid_y INTEGER NOT NULL,
-            elevation REAL NOT NULL,
-            resolution REAL NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (grid_x, grid_y)
-        );",
-    )?;
+) -> Result<(), tokio_postgres::Error> {
+    let (client, connection) = tokio_postgres::connect(&connection_string(), NoTls).await?;
+    let connection_health = Arc::clone(&storage_ok);
+    tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            eprintln!("PostgreSQL connection failed: {error}");
+        }
+        connection_health.store(false, Ordering::Release);
+    });
+    client
+        .batch_execute(include_str!("../../db/schema.sql"))
+        .await?;
     storage_ok.store(true, Ordering::Release);
-    while let Ok(command) = rx.recv() {
-        let result = (|| -> rusqlite::Result<()> {
-            let transaction = connection.unchecked_transaction()?;
-            match command {
-                DbCommand::SaveFrame { frame, pose, cells } => {
-                    transaction.execute(
-                        "INSERT INTO vehicle_poses (frame_id, pos_x, pos_y, pos_z, yaw) VALUES ($1, $2, $3, $4, $5)",
-                        params![frame as i64, pose.x, pose.y, pose.z, pose.yaw],
-                    )?;
-                    for (gx, gy, elevation, resolution) in cells {
-                        transaction.execute(
-                            "INSERT INTO grid_map_cells (grid_x, grid_y, elevation, resolution) VALUES ($1, $2, $3, $4)
-                             ON CONFLICT (grid_x, grid_y) DO UPDATE SET elevation = excluded.elevation, resolution = excluded.resolution, updated_at = CURRENT_TIMESTAMP",
-                            params![gx, gy, elevation, resolution],
-                        )?;
-                    }
-                }
+
+    let mut client = client;
+    let mut batch = Vec::with_capacity(64);
+    while let Some(command) = rx.recv().await {
+        batch.clear();
+        batch.push(command);
+        while batch.len() < 64 {
+            match rx.try_recv() {
+                Ok(command) => batch.push(command),
+                Err(_) => break,
             }
-            transaction.commit()
-        })();
-        if let Err(error) = result {
+        }
+        if let Err(error) = write_batch(&mut client, &batch).await {
             storage_ok.store(false, Ordering::Release);
-            eprintln!("Local storage write failed: {error}");
+            eprintln!("PostgreSQL batch write failed: {error}");
         } else {
             storage_ok.store(true, Ordering::Release);
-        };
+        }
     }
     Ok(())
+}
+
+async fn write_batch(
+    client: &mut tokio_postgres::Client,
+    batch: &[DbCommand],
+) -> Result<(), tokio_postgres::Error> {
+    let transaction = client.transaction().await?;
+    for command in batch {
+        match command {
+            DbCommand::SaveFrame {
+                frame,
+                pose,
+                cells,
+                objects,
+            } => {
+                transaction
+                    .execute(
+                        "INSERT INTO mapping_frames
+                         (frame_id, pose_x, pose_y, pose_z, yaw, point_count)
+                         VALUES ($1, $2, $3, $4, $5, $6)",
+                        &[
+                            &(*frame as i64),
+                            &pose.x,
+                            &pose.y,
+                            &pose.z,
+                            &pose.yaw,
+                            &(cells.len() as i32),
+                        ],
+                    )
+                    .await?;
+                for cell in cells {
+                    transaction
+                        .execute(
+                            "INSERT INTO spatial_cells
+                             (grid_x, grid_y, resolution_band, elevation_min, elevation_max,
+                              elevation_mean, point_count, resolution, terrain_class, class_name, confidence)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                             ON CONFLICT (grid_x, grid_y, resolution_band)
+                             DO UPDATE SET elevation_min = EXCLUDED.elevation_min,
+                                           elevation_max = EXCLUDED.elevation_max,
+                                           elevation_mean = EXCLUDED.elevation_mean,
+                                           point_count = EXCLUDED.point_count,
+                                           resolution = EXCLUDED.resolution,
+                                           terrain_class = EXCLUDED.terrain_class,
+                                           class_name = EXCLUDED.class_name,
+                                           confidence = EXCLUDED.confidence,
+                                           updated_at = CURRENT_TIMESTAMP",
+                            &[
+                                &cell.grid_x,
+                                &cell.grid_y,
+                                &((cell.resolution * 100.0) as i16),
+                                &cell.elevation_min,
+                                &cell.elevation_max,
+                                &cell.elevation_mean,
+                                &(cell.point_count as i32),
+                                &cell.resolution,
+                                &cell.terrain_class.as_str(),
+                                &cell.semantic_class.as_str(),
+                                &cell.confidence,
+                            ],
+                        )
+                        .await?;
+                }
+                for object in objects {
+                    transaction
+                        .execute(
+                            "INSERT INTO detected_objects
+                             (frame_id, object_id, class_name, x, y, z, width, length, height, confidence, dynamic)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                            &[
+                                &(*frame as i64),
+                                &(object.id as i64),
+                                &format!("{:?}", object.class).to_lowercase(),
+                                &object.x,
+                                &object.y,
+                                &object.z,
+                                &object.width,
+                                &object.length,
+                                &object.height,
+                                &object.confidence,
+                                &object.dynamic,
+                            ],
+                        )
+                        .await?;
+                }
+            }
+        }
+    }
+    transaction.commit().await
 }
 
 struct App {
@@ -283,17 +614,29 @@ impl App {
                 egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(82, 196, 164)),
             );
         }
-        for point in &self.engine.points {
-            let (sin_yaw, cos_yaw) = self.engine.pose.yaw.sin_cos();
-            let world_x = self.engine.pose.x + point.x * cos_yaw - point.y * sin_yaw;
-            let world_y = self.engine.pose.y + point.x * sin_yaw + point.y * cos_yaw;
-            let position = center + egui::vec2(world_x * scale, -world_y * scale);
-            let color = egui::Color32::from_rgb(
-                (70.0 + point.intensity * 100.0) as u8,
-                (170.0 + point.intensity * 70.0) as u8,
-                (145.0 + point.intensity * 70.0) as u8,
+        for cell in self.engine.map.values() {
+            let world_x = cell.grid_x as f32 * cell.resolution;
+            let world_y = cell.grid_y as f32 * cell.resolution;
+            let min = center + egui::vec2(world_x * scale, -(world_y + cell.resolution) * scale);
+            let cell_size = egui::vec2(
+                (cell.resolution * scale).max(1.5),
+                (cell.resolution * scale).max(1.5),
             );
-            painter.circle_filled(position, 1.8 + point.z * 0.35, color);
+            let mut color = cell.semantic_class.color();
+            if cell.terrain_class == TerrainClass::Drivable {
+                color = egui::Color32::from_rgba_unmultiplied(74, 222, 128, 150);
+            } else if cell.terrain_class == TerrainClass::NonDrivable {
+                color = egui::Color32::from_rgba_unmultiplied(251, 191, 36, 170);
+            }
+            painter.rect_filled(egui::Rect::from_min_size(min, cell_size), 0.0, color);
+        }
+        for object in &self.engine.objects {
+            let position = center + egui::vec2(object.x * scale, -object.y * scale);
+            painter.circle_stroke(
+                position,
+                (object.width.max(object.length) * scale).max(4.0),
+                egui::Stroke::new(1.5_f32, SemanticClass::StaticObstacle.color()),
+            );
         }
         let vehicle = center + egui::vec2(self.engine.pose.x * scale, -self.engine.pose.y * scale);
         painter.circle_filled(vehicle, 7.0, egui::Color32::from_rgb(245, 184, 74));
@@ -331,7 +674,9 @@ impl eframe::App for App {
         visuals.widgets.active.bg_fill = egui::Color32::from_rgb(63, 145, 116);
         ctx.set_visuals(visuals);
         if self.running {
-            let dt = ctx.input(|input| input.stable_dt);
+            // Avoid a large simulation jump after the window has been
+            // suspended or dragged between monitors.
+            let dt = ctx.input(|input| input.stable_dt).min(0.1);
             self.engine.step(dt, self.speed);
         }
         egui::SidePanel::left("controls")
@@ -387,6 +732,15 @@ impl eframe::App for App {
                         ui.weak("Map cells");
                         ui.label(self.engine.map.len().to_string());
                         ui.end_row();
+                        ui.weak("Resolution bands");
+                        let bands = self
+                            .engine
+                            .map
+                            .values()
+                            .filter(|cell| cell.resolution == RES_NEAR)
+                            .count();
+                        ui.label(format!("{bands} near / {} total", self.engine.map.len()));
+                        ui.end_row();
                         ui.weak("Position");
                         ui.label(format!(
                             "{:.1}, {:.1} m",
@@ -417,10 +771,15 @@ impl eframe::App for App {
                         "Storage: degraded"
                     },
                 );
+                ui.collapsing("Semantic legend (rule-based)", |ui| {
+                    for class in SemanticClass::ALL {
+                        ui.colored_label(class.color(), class.as_str());
+                    }
+                });
             });
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Live tactical map");
-            ui.label("Position, scan returns, and vehicle trail");
+            ui.label("Local-coordinate 2.5D occupancy and elevation cells");
             ui.add_space(8.0);
             self.draw_map(ui);
         });
@@ -502,6 +861,7 @@ fn prepare_installation() -> Result<bool, Box<dyn std::error::Error + Send + Syn
 }
 
 fn main() -> eframe::Result<()> {
+    println!("[STATUS] Tactical Mapper starting with PostgreSQL persistence.");
     let was_installed = match prepare_installation() {
         Ok(was_installed) => was_installed,
         Err(error) => {
@@ -513,14 +873,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    const DB_CHANNEL_CAPACITY: usize = 32;
-    let (db_tx, db_rx) = mpsc::sync_channel(DB_CHANNEL_CAPACITY);
+    let (db_tx, db_rx) = mpsc::channel(DB_CHANNEL_CAPACITY);
     let storage_ok = Arc::new(AtomicBool::new(false));
     let worker_storage_ok = Arc::clone(&storage_ok);
     std::thread::spawn(move || {
-        if let Err(error) = run_db_worker(db_rx, worker_storage_ok) {
-            eprintln!("Local storage stopped: {error}");
-        }
+        let runtime = tokio::runtime::Runtime::new().expect("failed to start Tokio runtime");
+        runtime.block_on(async move {
+            if let Err(error) = run_db_worker(db_rx, worker_storage_ok).await {
+                eprintln!("PostgreSQL worker stopped: {error}");
+            }
+        });
     });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -566,9 +928,45 @@ mod tests {
 
     #[test]
     fn grid_resolution_follows_foveation_bands() {
-        assert_eq!(resolution_for_range(10.0), RES_NEAR);
-        assert_eq!(resolution_for_range(10.01), RES_MID);
-        assert_eq!(resolution_for_range(30.0), RES_MID);
-        assert_eq!(resolution_for_range(30.01), RES_FAR);
+        assert_eq!(resolution_for_range(10.0), Some(RES_NEAR));
+        assert_eq!(resolution_for_range(10.01), Some(RES_MID));
+        assert_eq!(resolution_for_range(30.0), Some(RES_MID));
+        assert_eq!(resolution_for_range(30.01), Some(RES_FAR));
+        assert_eq!(resolution_for_range(100.01), None);
+    }
+
+    #[test]
+    fn terrain_uses_cell_height_range() {
+        assert_eq!(terrain_for_cell(0.1, 0.2), TerrainClass::Drivable);
+        assert_eq!(terrain_for_cell(0.1, 0.5), TerrainClass::NonDrivable);
+    }
+
+    #[test]
+    fn dataset_is_loaded_for_replay() {
+        assert!(!load_dataset().is_empty());
+    }
+
+    #[test]
+    fn classifier_returns_terrain_and_obstacle_classes() {
+        assert_eq!(
+            classify_point(LidarPoint {
+                x: 1.0,
+                y: 1.0,
+                z: 0.5,
+                intensity: 0.2
+            })
+            .0,
+            SemanticClass::DrivableTerrain
+        );
+        assert_eq!(
+            classify_point(LidarPoint {
+                x: 1.0,
+                y: 1.0,
+                z: 0.9,
+                intensity: 0.9
+            })
+            .0,
+            SemanticClass::Barrier
+        );
     }
 }
