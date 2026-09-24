@@ -1,7 +1,10 @@
+mod lidar_ingest;
+
 use eframe::egui;
+use lidar_ingest::{parse_point_cloud_file, transform_point, IngestConfig, Point3D};
 use serde::Deserialize;
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -150,7 +153,38 @@ struct DatasetFrame {
     lidar_scan: Vec<DatasetPoint>,
 }
 
+fn load_point_cloud(path: &Path) -> Option<Vec<LidarPoint>> {
+    if !path.exists() {
+        return None;
+    }
+
+    let config = IngestConfig::with_range(0.1, 100.0);
+    let frame = parse_point_cloud_file(path, &config).ok()?;
+    Some(
+        frame
+            .points
+            .into_iter()
+            .map(|point| LidarPoint {
+                x: point.x,
+                y: point.y,
+                z: point.z,
+                intensity: point.intensity,
+            })
+            .collect(),
+    )
+}
+
 fn load_dataset() -> Vec<LidarPoint> {
+    if let Ok(path) = std::env::var("TACTICAL_MAPPER_LIDAR_FILE") {
+        if let Some(dataset) = load_point_cloud(Path::new(&path)) {
+            return dataset;
+        }
+        eprintln!(
+            "Could not load configured LiDAR file '{}'; falling back to embedded mock dataset.",
+            path
+        );
+    }
+
     let dataset: DatasetFrame = serde_json::from_str(include_str!("mock_lidar_stream.json"))
         .expect("mock LiDAR dataset must be valid JSON");
     dataset
@@ -165,15 +199,42 @@ fn load_dataset() -> Vec<LidarPoint> {
         .collect()
 }
 
-fn classify_point(point: LidarPoint) -> (SemanticClass, f32) {
-    if point.z < 0.75 {
-        (SemanticClass::DrivableTerrain, 0.82)
-    } else if point.z < 1.1 && point.intensity > 0.7 {
-        (SemanticClass::Barrier, 0.68)
-    } else if point.z > 1.6 {
-        (SemanticClass::StaticObstacle, 0.61)
+fn percentile(values: &[f32], fraction: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let index = ((sorted.len() as f32) * fraction).clamp(0.0, (sorted.len() - 1) as f32) as usize;
+    sorted[index]
+}
+
+fn estimate_ground_height(points: &[LidarPoint]) -> f32 {
+    if points.is_empty() {
+        return 0.0;
+    }
+
+    let heights: Vec<f32> = points.iter().map(|point| point.z).collect();
+    let lower_q = percentile(&heights, 0.25);
+    let median = percentile(&heights, 0.50);
+    let upper_q = percentile(&heights, 0.75);
+
+    let robust_ground = lower_q + (median - lower_q) * 0.5;
+    (robust_ground + upper_q * 0.25).clamp(0.0, 1.5)
+}
+
+fn classify_point(point: LidarPoint, ground_height: f32) -> (SemanticClass, f32) {
+    let height_above_ground = (point.z - ground_height).max(0.0);
+    let range = point.x.hypot(point.y);
+
+    if height_above_ground < 0.18 && range <= 30.0 {
+        (SemanticClass::DrivableTerrain, 0.88)
+    } else if height_above_ground < 0.55 && point.intensity > 0.65 {
+        (SemanticClass::Barrier, 0.69)
+    } else if height_above_ground >= 0.65 || point.z > 1.0 {
+        (SemanticClass::StaticObstacle, 0.63)
     } else {
-        (SemanticClass::NonDrivableTerrain, 0.55)
+        (SemanticClass::NonDrivableTerrain, 0.58)
     }
 }
 
@@ -198,6 +259,18 @@ fn update_dead_reckoning(pose: &mut Pose3D, acceleration: f32, gyro: f32, dt: f3
     let (sin_yaw, cos_yaw) = pose.yaw.sin_cos();
     pose.x += acceleration * dt * cos_yaw;
     pose.y += acceleration * dt * sin_yaw;
+}
+
+fn configured_motion() -> (f32, f32) {
+    let acceleration = std::env::var("TACTICAL_MAPPER_ACCELERATION")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.5);
+    let gyro = std::env::var("TACTICAL_MAPPER_GYRO_RATE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.01);
+    (acceleration, gyro)
 }
 
 const RES_NEAR: f32 = 0.05;
@@ -229,47 +302,108 @@ fn terrain_for_cell(elevation_min: f32, elevation_max: f32) -> TerrainClass {
     }
 }
 
-fn detect_objects(points: &[LidarPoint]) -> Vec<DetectedObject> {
-    let elevated: Vec<_> = points.iter().filter(|point| point.z > 1.6).collect();
-    if elevated.is_empty() {
-        return Vec::new();
+fn grid_cell_for_world(world_x: f32, world_y: f32, resolution: f32) -> (i32, i32) {
+    (
+        (world_x / resolution).floor() as i32,
+        (world_y / resolution).floor() as i32,
+    )
+}
+
+fn update_cell_statistics(
+    cell: &mut SpatialCell,
+    point: LidarPoint,
+    semantic_class: SemanticClass,
+    confidence: f32,
+) {
+    let previous_min = cell.elevation_min;
+    let previous_max = cell.elevation_max;
+    let previous_count = cell.point_count;
+    let previous_class = cell.semantic_class;
+
+    cell.elevation_min = cell.elevation_min.min(point.z);
+    cell.elevation_max = cell.elevation_max.max(point.z);
+    cell.elevation_sum += point.z;
+    cell.point_count += 1;
+    cell.elevation_mean = cell.elevation_sum / cell.point_count as f32;
+    cell.terrain_class = terrain_for_cell(cell.elevation_min, cell.elevation_max);
+
+    if confidence >= cell.confidence {
+        cell.semantic_class = semantic_class;
+        cell.confidence = confidence;
     }
-    let min_x = elevated
-        .iter()
-        .map(|point| point.x)
-        .fold(f32::INFINITY, f32::min);
-    let max_x = elevated
-        .iter()
-        .map(|point| point.x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = elevated
-        .iter()
-        .map(|point| point.y)
-        .fold(f32::INFINITY, f32::min);
-    let max_y = elevated
-        .iter()
-        .map(|point| point.y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_z = elevated
-        .iter()
-        .map(|point| point.z)
-        .fold(f32::INFINITY, f32::min);
-    let max_z = elevated
-        .iter()
-        .map(|point| point.z)
-        .fold(f32::NEG_INFINITY, f32::max);
-    vec![DetectedObject {
-        id: 1,
-        class: ObjectClass::StaticObstacle,
-        x: (min_x + max_x) / 2.0,
-        y: (min_y + max_y) / 2.0,
-        z: (min_z + max_z) / 2.0,
-        width: max_x - min_x,
-        length: max_y - min_y,
-        height: max_z - min_z,
-        confidence: 0.61,
-        dynamic: false,
-    }]
+
+    if previous_min != cell.elevation_min
+        || previous_max != cell.elevation_max
+        || previous_count != cell.point_count
+        || previous_class != cell.semantic_class
+    {
+        cell.semantic_class = semantic_class;
+    }
+}
+
+fn detect_objects(points: &[LidarPoint], previous: &[DetectedObject]) -> Vec<DetectedObject> {
+    let elevated: Vec<LidarPoint> = points.iter().copied().filter(|point| point.z > 1.6).collect();
+    let mut visited = vec![false; elevated.len()];
+    let mut objects = Vec::new();
+
+    for start in 0..elevated.len() {
+        if visited[start] {
+            continue;
+        }
+        visited[start] = true;
+        let mut cluster = vec![elevated[start]];
+        let mut frontier = vec![start];
+        while let Some(index) = frontier.pop() {
+            for candidate in 0..elevated.len() {
+                if visited[candidate] {
+                    continue;
+                }
+                let dx = elevated[index].x - elevated[candidate].x;
+                let dy = elevated[index].y - elevated[candidate].y;
+                if dx.hypot(dy) <= 1.5 {
+                    visited[candidate] = true;
+                    frontier.push(candidate);
+                    cluster.push(elevated[candidate]);
+                }
+            }
+        }
+        if cluster.len() < 2 {
+            continue;
+        }
+
+        let min_x = cluster.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
+        let max_x = cluster.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);
+        let min_y = cluster.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
+        let max_y = cluster.iter().map(|point| point.y).fold(f32::NEG_INFINITY, f32::max);
+        let min_z = cluster.iter().map(|point| point.z).fold(f32::INFINITY, f32::min);
+        let max_z = cluster.iter().map(|point| point.z).fold(f32::NEG_INFINITY, f32::max);
+        let x = (min_x + max_x) / 2.0;
+        let y = (min_y + max_y) / 2.0;
+        let id = previous
+            .iter()
+            .filter(|object| (object.x - x).hypot(object.y - y) <= 3.0)
+            .min_by(|left, right| {
+                (left.x - x)
+                    .hypot(left.y - y)
+                    .partial_cmp(&(right.x - x).hypot(right.y - y))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|object| object.id)
+            .unwrap_or_else(|| previous.iter().map(|object| object.id).max().unwrap_or(0) + objects.len() as u64 + 1);
+        objects.push(DetectedObject {
+            id,
+            class: ObjectClass::StaticObstacle,
+            x,
+            y,
+            z: (min_z + max_z) / 2.0,
+            width: (max_x - min_x).max(0.1),
+            length: (max_y - min_y).max(0.1),
+            height: (max_z - min_z).max(0.1),
+            confidence: (0.55 + cluster.len() as f32 / 100.0).min(0.95),
+            dynamic: false,
+        });
+    }
+    objects
 }
 
 #[derive(Debug, Clone)]
@@ -329,7 +463,8 @@ impl Engine {
     fn step(&mut self, dt: f32, speed: f32) {
         let simulation_dt = dt * speed;
         self.simulation_time += simulation_dt;
-        update_dead_reckoning(&mut self.pose, 0.5, 0.01, simulation_dt);
+        let (acceleration, gyro) = configured_motion();
+        update_dead_reckoning(&mut self.pose, acceleration, gyro, simulation_dt);
         self.trail.push_back((self.pose.x, self.pose.y));
         if self.trail.len() > 2048 {
             self.trail.pop_front();
@@ -337,6 +472,7 @@ impl Engine {
 
         self.points.clear();
         let dataset_len = self.dataset.len();
+        let ground_height = estimate_ground_height(&self.dataset);
         let mut changed_cells = Vec::new();
         for index in 0..dataset_len {
             let dataset_point = self.dataset[(self.dataset_offset + index) % dataset_len];
@@ -353,37 +489,40 @@ impl Engine {
             {
                 continue;
             }
+            let transformed = transform_point(
+                Point3D {
+                    x: point.x,
+                    y: point.y,
+                    z: point.z,
+                    intensity: point.intensity,
+                },
+                self.pose.x,
+                self.pose.y,
+                self.pose.yaw,
+            );
+            let point = LidarPoint {
+                x: transformed.x,
+                y: transformed.y,
+                z: transformed.z,
+                intensity: transformed.intensity,
+            };
             self.points.push(point);
 
-            let (sin_yaw, cos_yaw) = self.pose.yaw.sin_cos();
-            let world_x = self.pose.x + point.x * cos_yaw - point.y * sin_yaw;
-            let world_y = self.pose.y + point.x * sin_yaw + point.y * cos_yaw;
+            let world_x = point.x;
+            let world_y = point.y;
             let range = point.x.hypot(point.y);
             let Some(resolution) = resolution_for_range(range) else {
                 continue;
             };
             let resolution_band = (resolution * 100.0) as u8;
-            let (semantic_class, confidence) = classify_point(point);
-            let cell = (
-                (world_x / resolution).floor() as i32,
-                (world_y / resolution).floor() as i32,
-            );
+            let (semantic_class, confidence) = classify_point(point, ground_height);
+            let cell = grid_cell_for_world(world_x, world_y, resolution);
             let key = (cell.0, cell.1, resolution_band);
             match self.map.entry(key) {
                 Entry::Occupied(mut entry) => {
                     let stored = entry.get_mut();
                     let previous = *stored;
-                    stored.elevation_min = stored.elevation_min.min(point.z);
-                    stored.elevation_max = stored.elevation_max.max(point.z);
-                    stored.elevation_sum += point.z;
-                    stored.point_count += 1;
-                    stored.elevation_mean = stored.elevation_sum / stored.point_count as f32;
-                    stored.terrain_class =
-                        terrain_for_cell(stored.elevation_min, stored.elevation_max);
-                    if confidence >= stored.confidence {
-                        stored.semantic_class = semantic_class;
-                        stored.confidence = confidence;
-                    }
+                    update_cell_statistics(stored, point, semantic_class, confidence);
                     if previous.elevation_min != stored.elevation_min
                         || previous.elevation_max != stored.elevation_max
                         || previous.point_count != stored.point_count
@@ -412,7 +551,7 @@ impl Engine {
             }
         }
         self.dataset_offset = (self.dataset_offset + 1) % dataset_len;
-        self.objects = detect_objects(&self.points);
+        self.objects = detect_objects(&self.points, &self.objects);
         if self
             .db_tx
             .try_send(DbCommand::SaveFrame {
@@ -928,11 +1067,20 @@ mod tests {
 
     #[test]
     fn grid_resolution_follows_foveation_bands() {
+        assert_eq!(resolution_for_range(9.99), Some(RES_NEAR));
         assert_eq!(resolution_for_range(10.0), Some(RES_NEAR));
         assert_eq!(resolution_for_range(10.01), Some(RES_MID));
+        assert_eq!(resolution_for_range(29.99), Some(RES_MID));
         assert_eq!(resolution_for_range(30.0), Some(RES_MID));
         assert_eq!(resolution_for_range(30.01), Some(RES_FAR));
         assert_eq!(resolution_for_range(100.01), None);
+    }
+
+    #[test]
+    fn grid_cell_conversion_is_stable_for_resolution_zones() {
+        assert_eq!(grid_cell_for_world(0.049, 0.049, RES_NEAR), (0, 0));
+        assert_eq!(grid_cell_for_world(0.050, 0.050, RES_NEAR), (1, 1));
+        assert_eq!(grid_cell_for_world(10.10, 20.20, RES_MID), (101, 202));
     }
 
     #[test]
@@ -948,13 +1096,18 @@ mod tests {
 
     #[test]
     fn classifier_returns_terrain_and_obstacle_classes() {
+        let ground = estimate_ground_height(&[
+            LidarPoint { x: 0.0, y: 0.0, z: 0.12, intensity: 0.2 },
+            LidarPoint { x: 0.5, y: 0.0, z: 0.18, intensity: 0.2 },
+            LidarPoint { x: 0.2, y: 0.2, z: 0.22, intensity: 0.2 },
+        ]);
         assert_eq!(
             classify_point(LidarPoint {
                 x: 1.0,
                 y: 1.0,
-                z: 0.5,
+                z: 0.14,
                 intensity: 0.2
-            })
+            }, ground)
             .0,
             SemanticClass::DrivableTerrain
         );
@@ -964,9 +1117,29 @@ mod tests {
                 y: 1.0,
                 z: 0.9,
                 intensity: 0.9
-            })
+            }, ground)
             .0,
-            SemanticClass::Barrier
+            SemanticClass::StaticObstacle
         );
+    }
+
+    #[test]
+    fn object_clusters_receive_stable_ids() {
+        let first = vec![
+            LidarPoint { x: 1.0, y: 1.0, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 1.4, y: 1.1, z: 2.2, intensity: 0.5 },
+            LidarPoint { x: 8.0, y: 8.0, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 8.3, y: 8.2, z: 2.1, intensity: 0.5 },
+        ];
+        let objects = detect_objects(&first, &[]);
+        assert_eq!(objects.len(), 2);
+        let second = vec![
+            LidarPoint { x: 1.2, y: 1.1, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 1.5, y: 1.2, z: 2.2, intensity: 0.5 },
+            LidarPoint { x: 8.2, y: 8.1, z: 2.0, intensity: 0.5 },
+            LidarPoint { x: 8.5, y: 8.3, z: 2.1, intensity: 0.5 },
+        ];
+        let updated = detect_objects(&second, &objects);
+        assert_eq!(updated.iter().map(|object| object.id).collect::<Vec<_>>(), objects.iter().map(|object| object.id).collect::<Vec<_>>());
     }
 }

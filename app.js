@@ -11,6 +11,8 @@ const yawValue = document.querySelector("#telemetry-yaw");
 const pointsValue = document.querySelector("#telemetry-points");
 const objectsValue = document.querySelector("#telemetry-objects");
 const replayButton = document.querySelector("#start-replay");
+const loopInput = document.querySelector("#replay-loop");
+const scenarioInput = document.querySelector("#replay-scenario");
 const ids = (prefix) => Object.fromEntries(["drivable", "nondrivable", "static", "dynamic", "near", "mid", "far", "cells", "fps", "latency", "point-rate", "queue"].map((name) => [name, document.querySelector(`#${prefix}-${name}`)]));
 const semanticValues = ids("semantic");
 const zoneValues = ids("zone");
@@ -29,22 +31,25 @@ const state = {
   latency: 0,
   frameInterval: 16.7,
   queue: 0,
-  replayFrames: [],
+  replayFrames: window.TACTICAL_MAPPER_REPLAY || [],
   replayIndex: 0,
+  replayElapsed: 0,
   replayLoaded: false,
+  loop: true,
+  scenario: "default",
   currentFrame: { raw_point_count: 0, pose: { x: 0, y: 0, yaw: 0 }, cells: [], objects: [] },
 };
 
-async function loadReplay() {
-  const frames = await Promise.all([1, 2].map(async (number) => {
-    const response = await fetch(`./demo/frame_${String(number).padStart(4, "0")}.json`);
-    if (!response.ok) throw new Error(`Replay frame ${number} failed to load`);
-    return response.json();
-  }));
-  state.replayFrames = frames;
+function loadReplay() {
+  if (!state.replayFrames.length) {
+    throw new Error("Replay data is unavailable");
+  }
   state.replayLoaded = true;
-  state.currentFrame = frames[0];
+  state.replayIndex = 0;
+  state.replayElapsed = 0;
+  state.currentFrame = state.replayFrames[0];
   state.frame = 1;
+  state.pose = { ...state.currentFrame.pose };
   updateTelemetry();
   draw();
 }
@@ -86,7 +91,7 @@ function updateTelemetry() {
   zoneValues.far.textContent = cells.filter((cell) => cell.resolution === 0.5).length;
   metricValues.fps.textContent = state.fps.toFixed(1);
   metricValues.latency.textContent = `${state.latency.toFixed(2)} ms`;
-  metricValues["point-rate"].textContent = `${Math.round(240 / Math.max(state.frameInterval / 1000, 0.001)).toLocaleString()}/s`;
+  metricValues["point-rate"].textContent = `${Math.round(state.currentFrame.raw_point_count / Math.max(state.frameInterval / 1000, 0.001)).toLocaleString()}/s`;
   metricValues.queue.textContent = `demo · ${state.queue} pending`;
 }
 
@@ -175,8 +180,27 @@ function step(timestamp) {
     const simulationDelta = delta * state.speed;
     state.time += simulationDelta;
     if (state.replayLoaded) {
-      state.replayIndex += 1;
-      applyReplayFrame();
+      state.replayElapsed += simulationDelta;
+      const nextFrame = state.replayFrames[(state.replayIndex + 1) % state.replayFrames.length];
+      const currentFrame = state.replayFrames[state.replayIndex];
+      const frameDuration = Math.max(
+        nextFrame.timestamp > currentFrame.timestamp
+          ? nextFrame.timestamp - currentFrame.timestamp
+          : currentFrame.timestamp - (state.replayFrames[state.replayIndex - 1]?.timestamp || 0),
+        0.001,
+      );
+      if (state.replayElapsed >= frameDuration) {
+        state.replayElapsed %= frameDuration;
+        const nextIndex = state.replayIndex + 1;
+        if (nextIndex >= state.replayFrames.length && !state.loop) {
+          state.running = false;
+          toggleButton.textContent = "Resume";
+          state.replayIndex = state.replayFrames.length - 1;
+        } else {
+          state.replayIndex = nextIndex % state.replayFrames.length;
+        }
+        applyReplayFrame();
+      }
     }
     state.latency = performance.now() - frameStart;
     state.frameInterval = delta * 1000;
@@ -200,15 +224,19 @@ resetButton.addEventListener("click", () => {
   state.pose = { x: 0, y: 0, yaw: 0 };
   state.trail = [];
   state.replayIndex = 0;
-  if (state.replayLoaded) applyReplayFrame();
+  state.replayElapsed = 0;
+  if (state.replayLoaded) {
+    state.currentFrame = state.replayFrames[0];
+    state.pose = { ...state.currentFrame.pose };
+  }
   updateTelemetry();
 });
 
-replayButton.addEventListener("click", async () => {
+replayButton.addEventListener("click", () => {
   replayButton.disabled = true;
   replayButton.textContent = "Loading replay…";
   try {
-    if (!state.replayLoaded) await loadReplay();
+    if (!state.replayLoaded) loadReplay();
     state.running = true;
     toggleButton.textContent = "Pause";
     replayButton.textContent = "Replay loaded";
@@ -225,10 +253,23 @@ speedInput.addEventListener("input", () => {
   speedValue.textContent = `${state.speed}x`;
 });
 
+loopInput.addEventListener("change", () => {
+  state.loop = loopInput.checked;
+});
+
+scenarioInput.addEventListener("change", () => {
+  state.scenario = scenarioInput.value;
+  resetButton.click();
+});
+
 window.addEventListener("resize", resizeCanvas);
 updateTelemetry();
 resizeCanvas();
-loadReplay().catch(() => {
-  replayButton.textContent = "Start LiDAR replay";
-});
+try {
+  loadReplay();
+  replayButton.textContent = "Replay running";
+} catch {
+  replayButton.textContent = "Replay unavailable";
+  statusValue.textContent = "Replay unavailable";
+}
 requestAnimationFrame(step);

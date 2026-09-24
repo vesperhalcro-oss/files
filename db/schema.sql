@@ -49,3 +49,12 @@ CREATE TABLE IF NOT EXISTS detected_objects (
     confidence REAL NOT NULL,
     dynamic BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+CREATE INDEX IF NOT EXISTS mapping_frames_timestamp_idx
+    ON mapping_frames (timestamp_ns DESC);
+
+CREATE INDEX IF NOT EXISTS spatial_cells_terrain_idx
+    ON spatial_cells (terrain_class, resolution_band);
+
+CREATE INDEX IF NOT EXISTS detected_objects_frame_idx
+    ON detected_objects (frame_id, object_id);

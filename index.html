@@ -15,6 +15,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./demo/replay-data.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -89,6 +90,16 @@
                 <input id="simulation-speed" type="range" min="0.5" max="3" step="0.5" value="1" />
                 <output id="speed-value">1x</output>
               </label>
+              <label class="speed-control" for="replay-scenario">
+                Scenario
+                <select id="replay-scenario">
+                  <option value="default">Recorded LiDAR</option>
+                </select>
+              </label>
+              <label class="speed-control" for="replay-loop">
+                <input id="replay-loop" type="checkbox" checked />
+                Loop
+              </label>
             </div>
             <div class="app-grid">
               <div class="live-map-card">
@@ -128,8 +139,8 @@
                 <p class="panel-label">Measured performance</p>
                 <div class="metric-list">
                   <div><span>Browser FPS</span><strong id="metric-fps">0</strong></div>
-                  <div><span>Frame latency</span><strong id="metric-latency">0 ms</strong></div>
-                  <div><span>Point rate</span><strong id="metric-point-rate">0/s</strong></div>
+                  <div><span>Replay latency</span><strong id="metric-latency">0 ms</strong></div>
+                  <div><span>Replay point rate</span><strong id="metric-point-rate">0/s</strong></div>
                   <div><span>Queue</span><strong id="metric-queue">0 pending</strong></div>
                 </div>
               </section>
