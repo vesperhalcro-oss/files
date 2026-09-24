@@ -1,7 +1,5 @@
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,6 +71,7 @@ pub fn parse_point_cloud_file(path: &Path, config: &IngestConfig) -> Result<Lida
     })
 }
 
+#[allow(dead_code)]
 pub async fn spawn_ingest_worker(
     mut rx: mpsc::Receiver<PathBuf>,
     tx: mpsc::Sender<LidarFrame>,
@@ -152,6 +151,22 @@ fn downsample_voxel_grid(points: Vec<Point3D>, voxel_size: f32) -> Vec<Point3D> 
             intensity: sum_intensity / count,
         });
     }
+
+    reduced.sort_by(|left, right| {
+        left.x
+            .partial_cmp(&right.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.y
+                    .partial_cmp(&right.y)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                left.z
+                    .partial_cmp(&right.z)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
 
     reduced
 }
@@ -352,15 +367,15 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    fn temp_path(name: &str) -> PathBuf {
+    fn temp_path(name: &str, extension: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("tactical_mapper_{name}_{}.bin", std::process::id()));
+        path.push(format!("tactical_mapper_{name}_{}.{}", std::process::id(), extension));
         path
     }
 
     #[test]
     fn velodyne_bin_parses_known_points() {
-        let path = temp_path("velodyne");
+        let path = temp_path("velodyne", "bin");
         let points = [
             1.0_f32, 2.0, 3.0, 0.5,
             4.0, 5.0, 6.0, 0.9,
@@ -382,7 +397,7 @@ mod tests {
 
     #[test]
     fn pcd_ascii_parses_xyz() {
-        let path = temp_path("pcd");
+        let path = temp_path("pcd", "pcd");
         let content = "VERSION .7\nFIELDS x y z intensity\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA ascii\n1 2 3 0.25\n4 5 6 0.75\n";
         fs::write(&path, content).unwrap();
 

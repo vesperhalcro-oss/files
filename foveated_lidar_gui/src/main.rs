@@ -1,7 +1,10 @@
+mod lidar_ingest;
+
 use eframe::egui;
+use lidar_ingest::{parse_point_cloud_file, transform_point, IngestConfig, Point3D};
 use serde::Deserialize;
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -150,7 +153,38 @@ struct DatasetFrame {
     lidar_scan: Vec<DatasetPoint>,
 }
 
+fn load_point_cloud(path: &Path) -> Option<Vec<LidarPoint>> {
+    if !path.exists() {
+        return None;
+    }
+
+    let config = IngestConfig::with_range(0.1, 100.0);
+    let frame = parse_point_cloud_file(path, &config).ok()?;
+    Some(
+        frame
+            .points
+            .into_iter()
+            .map(|point| LidarPoint {
+                x: point.x,
+                y: point.y,
+                z: point.z,
+                intensity: point.intensity,
+            })
+            .collect(),
+    )
+}
+
 fn load_dataset() -> Vec<LidarPoint> {
+    if let Ok(path) = std::env::var("TACTICAL_MAPPER_LIDAR_FILE") {
+        if let Some(dataset) = load_point_cloud(Path::new(&path)) {
+            return dataset;
+        }
+        eprintln!(
+            "Could not load configured LiDAR file '{}'; falling back to embedded mock dataset.",
+            path
+        );
+    }
+
     let dataset: DatasetFrame = serde_json::from_str(include_str!("mock_lidar_stream.json"))
         .expect("mock LiDAR dataset must be valid JSON");
     dataset
@@ -353,11 +387,27 @@ impl Engine {
             {
                 continue;
             }
+            let transformed = transform_point(
+                Point3D {
+                    x: point.x,
+                    y: point.y,
+                    z: point.z,
+                    intensity: point.intensity,
+                },
+                self.pose.x,
+                self.pose.y,
+                self.pose.yaw,
+            );
+            let point = LidarPoint {
+                x: transformed.x,
+                y: transformed.y,
+                z: transformed.z,
+                intensity: transformed.intensity,
+            };
             self.points.push(point);
 
-            let (sin_yaw, cos_yaw) = self.pose.yaw.sin_cos();
-            let world_x = self.pose.x + point.x * cos_yaw - point.y * sin_yaw;
-            let world_y = self.pose.y + point.x * sin_yaw + point.y * cos_yaw;
+            let world_x = point.x;
+            let world_y = point.y;
             let range = point.x.hypot(point.y);
             let Some(resolution) = resolution_for_range(range) else {
                 continue;
