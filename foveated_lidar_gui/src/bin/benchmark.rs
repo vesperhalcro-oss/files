@@ -37,7 +37,13 @@ fn main() {
             }
             points_processed += 1;
             let range = point.x.hypot(point.y);
-            let resolution = if range <= 10.0 { 0.05 } else if range <= 30.0 { 0.1 } else { 0.5 };
+            let resolution = if range <= 10.0 {
+                0.05
+            } else if range <= 30.0 {
+                0.1
+            } else {
+                0.5
+            };
             cells.insert((
                 (point.x / resolution).floor() as i32,
                 (point.y / resolution).floor() as i32,
@@ -56,8 +62,17 @@ fn main() {
     println!("P50 latency: {p50:.3} ms");
     println!("P95 latency: {p95:.3} ms");
     println!("P99 latency: {p99:.3} ms");
-    println!("Points/sec: {:.0}", points_processed as f64 / elapsed.max(f64::EPSILON));
-    println!("Cells/sec: {:.0}", cells.len() as f64 * frames as f64 / elapsed.max(f64::EPSILON));
+    println!(
+        "Points/sec: {:.0}",
+        points_processed as f64 / elapsed.max(f64::EPSILON)
+    );
+    println!(
+        "Cells/sec: {:.0}",
+        cells.len() as f64 * frames as f64 / elapsed.max(f64::EPSILON)
+    );
     println!("Peak memory: unavailable (run under a system profiler)");
-    println!("Foveated reduction: {:.1}%", 100.0 * (1.0 - cells.len() as f64 / points_processed.max(1) as f64));
+    println!(
+        "Foveated reduction: {:.1}%",
+        100.0 * (1.0 - cells.len() as f64 / points_processed.max(1) as f64)
+    );
 }

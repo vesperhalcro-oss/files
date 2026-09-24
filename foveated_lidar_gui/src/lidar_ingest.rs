@@ -92,10 +92,7 @@ pub async fn spawn_ingest_worker(
 }
 
 fn is_valid_point(point: Point3D) -> bool {
-    point.x.is_finite()
-        && point.y.is_finite()
-        && point.z.is_finite()
-        && point.intensity.is_finite()
+    point.x.is_finite() && point.y.is_finite() && point.z.is_finite() && point.intensity.is_finite()
 }
 
 fn point_in_range(point: Point3D, config: &IngestConfig) -> bool {
@@ -120,7 +117,8 @@ fn filter_points(points: Vec<Point3D>, config: &IngestConfig) -> Vec<Point3D> {
 }
 
 fn downsample_voxel_grid(points: Vec<Point3D>, voxel_size: f32) -> Vec<Point3D> {
-    let mut centers: std::collections::HashMap<(i64, i64, i64), Vec<Point3D>> = std::collections::HashMap::new();
+    let mut centers: std::collections::HashMap<(i64, i64, i64), Vec<Point3D>> =
+        std::collections::HashMap::new();
 
     for point in points {
         let key = (
@@ -172,8 +170,8 @@ fn downsample_voxel_grid(points: Vec<Point3D>, voxel_size: f32) -> Vec<Point3D> 
 }
 
 fn parse_velodyne_bin(path: &Path, config: &IngestConfig) -> Result<Vec<Point3D>, String> {
-    let bytes = fs::read(path)
-        .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("Could not read {}: {error}", path.display()))?;
     if bytes.len() % std::mem::size_of::<f32>() != 0 {
         return Err(format!(
             "Invalid Velodyne .bin payload in {}: odd number of bytes",
@@ -183,9 +181,7 @@ fn parse_velodyne_bin(path: &Path, config: &IngestConfig) -> Result<Vec<Point3D>
 
     let mut values = Vec::with_capacity(bytes.len() / std::mem::size_of::<f32>());
     for chunk in bytes.chunks_exact(std::mem::size_of::<f32>()) {
-        let value = f32::from_le_bytes([
-            chunk[0], chunk[1], chunk[2], chunk[3],
-        ]);
+        let value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         values.push(value);
     }
 
@@ -233,7 +229,10 @@ fn parse_pcd_ascii(path: &Path, config: &IngestConfig) -> Result<Vec<Point3D>, S
             }
             continue;
         }
-        if trimmed.starts_with("SIZE") || trimmed.starts_with("TYPE") || trimmed.starts_with("COUNT") {
+        if trimmed.starts_with("SIZE")
+            || trimmed.starts_with("TYPE")
+            || trimmed.starts_with("COUNT")
+        {
             continue;
         }
         if trimmed.starts_with("POINTS") {
@@ -271,12 +270,7 @@ fn parse_pcd_ascii(path: &Path, config: &IngestConfig) -> Result<Vec<Point3D>, S
             }
         }
 
-        points.push(Point3D {
-            x,
-            y,
-            z,
-            intensity,
-        });
+        points.push(Point3D { x, y, z, intensity });
     }
 
     Ok(filter_points(points, config))
@@ -340,12 +334,7 @@ fn parse_ply_ascii(path: &Path, config: &IngestConfig) -> Result<Vec<Point3D>, S
             }
         }
 
-        points.push(Point3D {
-            x,
-            y,
-            z,
-            intensity,
-        });
+        points.push(Point3D { x, y, z, intensity });
     }
 
     Ok(filter_points(points, config))
@@ -369,17 +358,18 @@ mod tests {
 
     fn temp_path(name: &str, extension: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("tactical_mapper_{name}_{}.{}", std::process::id(), extension));
+        path.push(format!(
+            "tactical_mapper_{name}_{}.{}",
+            std::process::id(),
+            extension
+        ));
         path
     }
 
     #[test]
     fn velodyne_bin_parses_known_points() {
         let path = temp_path("velodyne", "bin");
-        let points = [
-            1.0_f32, 2.0, 3.0, 0.5,
-            4.0, 5.0, 6.0, 0.9,
-        ];
+        let points = [1.0_f32, 2.0, 3.0, 0.5, 4.0, 5.0, 6.0, 0.9];
         let bytes: Vec<u8> = points
             .iter()
             .flat_map(|value| value.to_le_bytes())
@@ -389,8 +379,24 @@ mod tests {
         let config = IngestConfig::default();
         let frame = parse_point_cloud_file(&path, &config).unwrap();
         assert_eq!(frame.points.len(), 2);
-        assert_eq!(frame.points[0], Point3D { x: 1.0, y: 2.0, z: 3.0, intensity: 0.5 });
-        assert_eq!(frame.points[1], Point3D { x: 4.0, y: 5.0, z: 6.0, intensity: 0.9 });
+        assert_eq!(
+            frame.points[0],
+            Point3D {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+                intensity: 0.5
+            }
+        );
+        assert_eq!(
+            frame.points[1],
+            Point3D {
+                x: 4.0,
+                y: 5.0,
+                z: 6.0,
+                intensity: 0.9
+            }
+        );
 
         let _ = fs::remove_file(&path);
     }
@@ -413,8 +419,18 @@ mod tests {
     #[test]
     fn range_filter_removes_out_of_bounds_points() {
         let points = vec![
-            Point3D { x: 0.5, y: 0.0, z: 0.0, intensity: 1.0 },
-            Point3D { x: 120.0, y: 0.0, z: 0.0, intensity: 1.0 },
+            Point3D {
+                x: 0.5,
+                y: 0.0,
+                z: 0.0,
+                intensity: 1.0,
+            },
+            Point3D {
+                x: 120.0,
+                y: 0.0,
+                z: 0.0,
+                intensity: 1.0,
+            },
         ];
         let config = IngestConfig::with_range(0.1, 10.0);
         let filtered = filter_points(points, &config);
@@ -424,7 +440,12 @@ mod tests {
 
     #[test]
     fn transform_point_applies_pose_and_yaw() {
-        let point = Point3D { x: 1.0, y: 0.0, z: 0.0, intensity: 0.5 };
+        let point = Point3D {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+            intensity: 0.5,
+        };
         let transformed = transform_point(point, 2.0, 3.0, std::f32::consts::FRAC_PI_2);
         assert!((transformed.x - 2.0).abs() < 1e-5);
         assert!((transformed.y - 4.0).abs() < 1e-5);

@@ -342,7 +342,11 @@ fn update_cell_statistics(
 }
 
 fn detect_objects(points: &[LidarPoint], previous: &[DetectedObject]) -> Vec<DetectedObject> {
-    let elevated: Vec<LidarPoint> = points.iter().copied().filter(|point| point.z > 1.6).collect();
+    let elevated: Vec<LidarPoint> = points
+        .iter()
+        .copied()
+        .filter(|point| point.z > 1.6)
+        .collect();
     let mut visited = vec![false; elevated.len()];
     let mut objects = Vec::new();
 
@@ -371,12 +375,30 @@ fn detect_objects(points: &[LidarPoint], previous: &[DetectedObject]) -> Vec<Det
             continue;
         }
 
-        let min_x = cluster.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
-        let max_x = cluster.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);
-        let min_y = cluster.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
-        let max_y = cluster.iter().map(|point| point.y).fold(f32::NEG_INFINITY, f32::max);
-        let min_z = cluster.iter().map(|point| point.z).fold(f32::INFINITY, f32::min);
-        let max_z = cluster.iter().map(|point| point.z).fold(f32::NEG_INFINITY, f32::max);
+        let min_x = cluster
+            .iter()
+            .map(|point| point.x)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = cluster
+            .iter()
+            .map(|point| point.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = cluster
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        let max_y = cluster
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_z = cluster
+            .iter()
+            .map(|point| point.z)
+            .fold(f32::INFINITY, f32::min);
+        let max_z = cluster
+            .iter()
+            .map(|point| point.z)
+            .fold(f32::NEG_INFINITY, f32::max);
         let x = (min_x + max_x) / 2.0;
         let y = (min_y + max_y) / 2.0;
         let id = previous
@@ -389,7 +411,11 @@ fn detect_objects(points: &[LidarPoint], previous: &[DetectedObject]) -> Vec<Det
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|object| object.id)
-            .unwrap_or_else(|| previous.iter().map(|object| object.id).max().unwrap_or(0) + objects.len() as u64 + 1);
+            .unwrap_or_else(|| {
+                previous.iter().map(|object| object.id).max().unwrap_or(0)
+                    + objects.len() as u64
+                    + 1
+            });
         objects.push(DetectedObject {
             id,
             class: ObjectClass::StaticObstacle,
@@ -1097,27 +1123,48 @@ mod tests {
     #[test]
     fn classifier_returns_terrain_and_obstacle_classes() {
         let ground = estimate_ground_height(&[
-            LidarPoint { x: 0.0, y: 0.0, z: 0.12, intensity: 0.2 },
-            LidarPoint { x: 0.5, y: 0.0, z: 0.18, intensity: 0.2 },
-            LidarPoint { x: 0.2, y: 0.2, z: 0.22, intensity: 0.2 },
+            LidarPoint {
+                x: 0.0,
+                y: 0.0,
+                z: 0.12,
+                intensity: 0.2,
+            },
+            LidarPoint {
+                x: 0.5,
+                y: 0.0,
+                z: 0.18,
+                intensity: 0.2,
+            },
+            LidarPoint {
+                x: 0.2,
+                y: 0.2,
+                z: 0.22,
+                intensity: 0.2,
+            },
         ]);
         assert_eq!(
-            classify_point(LidarPoint {
-                x: 1.0,
-                y: 1.0,
-                z: 0.14,
-                intensity: 0.2
-            }, ground)
+            classify_point(
+                LidarPoint {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 0.14,
+                    intensity: 0.2
+                },
+                ground
+            )
             .0,
             SemanticClass::DrivableTerrain
         );
         assert_eq!(
-            classify_point(LidarPoint {
-                x: 1.0,
-                y: 1.0,
-                z: 0.9,
-                intensity: 0.9
-            }, ground)
+            classify_point(
+                LidarPoint {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 0.9,
+                    intensity: 0.9
+                },
+                ground
+            )
             .0,
             SemanticClass::StaticObstacle
         );
@@ -1126,20 +1173,63 @@ mod tests {
     #[test]
     fn object_clusters_receive_stable_ids() {
         let first = vec![
-            LidarPoint { x: 1.0, y: 1.0, z: 2.0, intensity: 0.5 },
-            LidarPoint { x: 1.4, y: 1.1, z: 2.2, intensity: 0.5 },
-            LidarPoint { x: 8.0, y: 8.0, z: 2.0, intensity: 0.5 },
-            LidarPoint { x: 8.3, y: 8.2, z: 2.1, intensity: 0.5 },
+            LidarPoint {
+                x: 1.0,
+                y: 1.0,
+                z: 2.0,
+                intensity: 0.5,
+            },
+            LidarPoint {
+                x: 1.4,
+                y: 1.1,
+                z: 2.2,
+                intensity: 0.5,
+            },
+            LidarPoint {
+                x: 8.0,
+                y: 8.0,
+                z: 2.0,
+                intensity: 0.5,
+            },
+            LidarPoint {
+                x: 8.3,
+                y: 8.2,
+                z: 2.1,
+                intensity: 0.5,
+            },
         ];
         let objects = detect_objects(&first, &[]);
         assert_eq!(objects.len(), 2);
         let second = vec![
-            LidarPoint { x: 1.2, y: 1.1, z: 2.0, intensity: 0.5 },
-            LidarPoint { x: 1.5, y: 1.2, z: 2.2, intensity: 0.5 },
-            LidarPoint { x: 8.2, y: 8.1, z: 2.0, intensity: 0.5 },
-            LidarPoint { x: 8.5, y: 8.3, z: 2.1, intensity: 0.5 },
+            LidarPoint {
+                x: 1.2,
+                y: 1.1,
+                z: 2.0,
+                intensity: 0.5,
+            },
+            LidarPoint {
+                x: 1.5,
+                y: 1.2,
+                z: 2.2,
+                intensity: 0.5,
+            },
+            LidarPoint {
+                x: 8.2,
+                y: 8.1,
+                z: 2.0,
+                intensity: 0.5,
+            },
+            LidarPoint {
+                x: 8.5,
+                y: 8.3,
+                z: 2.1,
+                intensity: 0.5,
+            },
         ];
         let updated = detect_objects(&second, &objects);
-        assert_eq!(updated.iter().map(|object| object.id).collect::<Vec<_>>(), objects.iter().map(|object| object.id).collect::<Vec<_>>());
+        assert_eq!(
+            updated.iter().map(|object| object.id).collect::<Vec<_>>(),
+            objects.iter().map(|object| object.id).collect::<Vec<_>>()
+        );
     }
 }
