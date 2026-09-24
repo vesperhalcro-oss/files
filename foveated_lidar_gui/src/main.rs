@@ -331,7 +331,9 @@ impl eframe::App for App {
         visuals.widgets.active.bg_fill = egui::Color32::from_rgb(63, 145, 116);
         ctx.set_visuals(visuals);
         if self.running {
-            let dt = ctx.input(|input| input.stable_dt);
+            // Avoid a large simulation jump after the window has been
+            // suspended or dragged between monitors.
+            let dt = ctx.input(|input| input.stable_dt).min(0.1);
             self.engine.step(dt, self.speed);
         }
         egui::SidePanel::left("controls")
