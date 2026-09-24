@@ -199,15 +199,42 @@ fn load_dataset() -> Vec<LidarPoint> {
         .collect()
 }
 
-fn classify_point(point: LidarPoint) -> (SemanticClass, f32) {
-    if point.z < 0.75 {
-        (SemanticClass::DrivableTerrain, 0.82)
-    } else if point.z < 1.1 && point.intensity > 0.7 {
-        (SemanticClass::Barrier, 0.68)
-    } else if point.z > 1.6 {
-        (SemanticClass::StaticObstacle, 0.61)
+fn percentile(values: &[f32], fraction: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    let index = ((sorted.len() as f32) * fraction).clamp(0.0, (sorted.len() - 1) as f32) as usize;
+    sorted[index]
+}
+
+fn estimate_ground_height(points: &[LidarPoint]) -> f32 {
+    if points.is_empty() {
+        return 0.0;
+    }
+
+    let heights: Vec<f32> = points.iter().map(|point| point.z).collect();
+    let lower_q = percentile(&heights, 0.25);
+    let median = percentile(&heights, 0.50);
+    let upper_q = percentile(&heights, 0.75);
+
+    let robust_ground = lower_q + (median - lower_q) * 0.5;
+    (robust_ground + upper_q * 0.25).clamp(0.0, 1.5)
+}
+
+fn classify_point(point: LidarPoint, ground_height: f32) -> (SemanticClass, f32) {
+    let height_above_ground = (point.z - ground_height).max(0.0);
+    let range = point.x.hypot(point.y);
+
+    if height_above_ground < 0.18 && range <= 30.0 {
+        (SemanticClass::DrivableTerrain, 0.88)
+    } else if height_above_ground < 0.55 && point.intensity > 0.65 {
+        (SemanticClass::Barrier, 0.69)
+    } else if height_above_ground >= 0.65 || point.z > 1.0 {
+        (SemanticClass::StaticObstacle, 0.63)
     } else {
-        (SemanticClass::NonDrivableTerrain, 0.55)
+        (SemanticClass::NonDrivableTerrain, 0.58)
     }
 }
 
@@ -410,6 +437,7 @@ impl Engine {
 
         self.points.clear();
         let dataset_len = self.dataset.len();
+        let ground_height = estimate_ground_height(&self.dataset);
         let mut changed_cells = Vec::new();
         for index in 0..dataset_len {
             let dataset_point = self.dataset[(self.dataset_offset + index) % dataset_len];
@@ -452,7 +480,7 @@ impl Engine {
                 continue;
             };
             let resolution_band = (resolution * 100.0) as u8;
-            let (semantic_class, confidence) = classify_point(point);
+            let (semantic_class, confidence) = classify_point(point, ground_height);
             let cell = grid_cell_for_world(world_x, world_y, resolution);
             let key = (cell.0, cell.1, resolution_band);
             match self.map.entry(key) {
@@ -1033,13 +1061,18 @@ mod tests {
 
     #[test]
     fn classifier_returns_terrain_and_obstacle_classes() {
+        let ground = estimate_ground_height(&[
+            LidarPoint { x: 0.0, y: 0.0, z: 0.12, intensity: 0.2 },
+            LidarPoint { x: 0.5, y: 0.0, z: 0.18, intensity: 0.2 },
+            LidarPoint { x: 0.2, y: 0.2, z: 0.22, intensity: 0.2 },
+        ]);
         assert_eq!(
             classify_point(LidarPoint {
                 x: 1.0,
                 y: 1.0,
-                z: 0.5,
+                z: 0.14,
                 intensity: 0.2
-            })
+            }, ground)
             .0,
             SemanticClass::DrivableTerrain
         );
@@ -1049,9 +1082,9 @@ mod tests {
                 y: 1.0,
                 z: 0.9,
                 intensity: 0.9
-            })
+            }, ground)
             .0,
-            SemanticClass::Barrier
+            SemanticClass::StaticObstacle
         );
     }
 }
