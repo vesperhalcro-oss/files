@@ -37,14 +37,14 @@ on first launch.
 
 If you are not a developer, follow these steps:
 
-1. Download `FoveatedLiDAR.exe` from the project release.
-2. Open your **Downloads** folder and double-click `FoveatedLiDAR.exe`.
+1. Download `TacticalMapper.exe` from the project release.
+2. Open your **Downloads** folder and double-click `TacticalMapper.exe`.
 3. If Windows shows a security warning, select **More info**, then **Run anyway**.
 4. The first launch installs the application and creates a desktop shortcut.
 5. Open **Tactical Mapper** from the desktop whenever you want to use it.
 
 The application stores its database at
-`%LOCALAPPDATA%\FoveatedLiDAR\foveated_lidar.sqlite3`.
+`%LOCALAPPDATA%\TacticalMapper\tactical_mapper.sqlite3`.
 
 ### From the source tree
 
@@ -73,7 +73,7 @@ release executable with:
 .\setup.ps1
 ```
 
-This builds `foveated_lidar_gui\target\release\foveated_lidar_gui.exe`, installs it to
-`%LOCALAPPDATA%\FoveatedLiDAR`, and creates a **Tactical Mapper** desktop
+This builds `foveated_lidar_gui\target\release\tactical_mapper.exe`, installs it to
+`%LOCALAPPDATA%\TacticalMapper`, and creates a **Tactical Mapper** desktop
 shortcut in one step. The application creates its local SQLite database on
 startup. PostgreSQL is not required.

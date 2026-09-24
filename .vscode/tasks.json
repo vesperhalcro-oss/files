@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Tactical Mapper",
+      "type": "shell",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\run_project.ps1\"",
+      "inAgents": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and Install Tactical Mapper",
+      "type": "shell",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}\\setup.ps1\"",
+      "inAgents": true,
+      "problemMatcher": []
+    }
+  ]
+}

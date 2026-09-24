@@ -1203,15 +1203,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "foveated_lidar_gui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "rusqlite",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3042,6 +3033,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "tactical_mapper"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "rusqlite",
 ]
 
 [[package]]
