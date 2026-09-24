@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds Foveated LiDAR and installs it for the current user.
+    Builds Tactical Mapper and installs it for the current user.
 
 .DESCRIPTION
     Single-step replacement for build_windows.ps1 + install_windows.ps1.
@@ -15,10 +15,10 @@
 $ErrorActionPreference = "Stop"
 
 $AppName    = "Tactical Mapper"
-$ExeName    = "FoveatedLiDAR.exe"
+$ExeName    = "TacticalMapper.exe"
 $Root       = $PSScriptRoot
 $ProjectDir = Join-Path $Root "foveated_lidar_gui"
-$InstallDir = Join-Path $env:LOCALAPPDATA "FoveatedLiDAR"
+$InstallDir = Join-Path $env:LOCALAPPDATA "TacticalMapper"
 
 function Assert-Cargo {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
@@ -43,7 +43,7 @@ function Build-Release {
 function Install-App {
     Write-Host "Installing to $InstallDir..." -ForegroundColor Cyan
 
-    $builtExe = Join-Path $ProjectDir "target\release\foveated_lidar_gui.exe"
+    $builtExe = Join-Path $ProjectDir "target\release\tactical_mapper.exe"
     if (-not (Test-Path $builtExe)) {
         throw "Build output not found at $builtExe."
     }
@@ -70,4 +70,4 @@ Write-Host ""
 Write-Host "$AppName installed successfully." -ForegroundColor Green
 Write-Host "  Executable: $installedPath"
 Write-Host "  Shortcut:   Desktop\$AppName.lnk"
-Write-Host "  Database:   %LOCALAPPDATA%\FoveatedLiDAR\foveated_lidar.sqlite3 (created on first run)"
+Write-Host "  Database:   %LOCALAPPDATA%\TacticalMapper\tactical_mapper.sqlite3 (created on first run)"
