@@ -263,6 +263,45 @@ fn terrain_for_cell(elevation_min: f32, elevation_max: f32) -> TerrainClass {
     }
 }
 
+fn grid_cell_for_world(world_x: f32, world_y: f32, resolution: f32) -> (i32, i32) {
+    (
+        (world_x / resolution).floor() as i32,
+        (world_y / resolution).floor() as i32,
+    )
+}
+
+fn update_cell_statistics(
+    cell: &mut SpatialCell,
+    point: LidarPoint,
+    semantic_class: SemanticClass,
+    confidence: f32,
+) {
+    let previous_min = cell.elevation_min;
+    let previous_max = cell.elevation_max;
+    let previous_count = cell.point_count;
+    let previous_class = cell.semantic_class;
+
+    cell.elevation_min = cell.elevation_min.min(point.z);
+    cell.elevation_max = cell.elevation_max.max(point.z);
+    cell.elevation_sum += point.z;
+    cell.point_count += 1;
+    cell.elevation_mean = cell.elevation_sum / cell.point_count as f32;
+    cell.terrain_class = terrain_for_cell(cell.elevation_min, cell.elevation_max);
+
+    if confidence >= cell.confidence {
+        cell.semantic_class = semantic_class;
+        cell.confidence = confidence;
+    }
+
+    if previous_min != cell.elevation_min
+        || previous_max != cell.elevation_max
+        || previous_count != cell.point_count
+        || previous_class != cell.semantic_class
+    {
+        cell.semantic_class = semantic_class;
+    }
+}
+
 fn detect_objects(points: &[LidarPoint]) -> Vec<DetectedObject> {
     let elevated: Vec<_> = points.iter().filter(|point| point.z > 1.6).collect();
     if elevated.is_empty() {
@@ -414,26 +453,13 @@ impl Engine {
             };
             let resolution_band = (resolution * 100.0) as u8;
             let (semantic_class, confidence) = classify_point(point);
-            let cell = (
-                (world_x / resolution).floor() as i32,
-                (world_y / resolution).floor() as i32,
-            );
+            let cell = grid_cell_for_world(world_x, world_y, resolution);
             let key = (cell.0, cell.1, resolution_band);
             match self.map.entry(key) {
                 Entry::Occupied(mut entry) => {
                     let stored = entry.get_mut();
                     let previous = *stored;
-                    stored.elevation_min = stored.elevation_min.min(point.z);
-                    stored.elevation_max = stored.elevation_max.max(point.z);
-                    stored.elevation_sum += point.z;
-                    stored.point_count += 1;
-                    stored.elevation_mean = stored.elevation_sum / stored.point_count as f32;
-                    stored.terrain_class =
-                        terrain_for_cell(stored.elevation_min, stored.elevation_max);
-                    if confidence >= stored.confidence {
-                        stored.semantic_class = semantic_class;
-                        stored.confidence = confidence;
-                    }
+                    update_cell_statistics(stored, point, semantic_class, confidence);
                     if previous.elevation_min != stored.elevation_min
                         || previous.elevation_max != stored.elevation_max
                         || previous.point_count != stored.point_count
@@ -978,11 +1004,20 @@ mod tests {
 
     #[test]
     fn grid_resolution_follows_foveation_bands() {
+        assert_eq!(resolution_for_range(9.99), Some(RES_NEAR));
         assert_eq!(resolution_for_range(10.0), Some(RES_NEAR));
         assert_eq!(resolution_for_range(10.01), Some(RES_MID));
+        assert_eq!(resolution_for_range(29.99), Some(RES_MID));
         assert_eq!(resolution_for_range(30.0), Some(RES_MID));
         assert_eq!(resolution_for_range(30.01), Some(RES_FAR));
         assert_eq!(resolution_for_range(100.01), None);
+    }
+
+    #[test]
+    fn grid_cell_conversion_is_stable_for_resolution_zones() {
+        assert_eq!(grid_cell_for_world(0.049, 0.049, RES_NEAR), (0, 0));
+        assert_eq!(grid_cell_for_world(0.050, 0.050, RES_NEAR), (1, 1));
+        assert_eq!(grid_cell_for_world(10.10, 20.20, RES_MID), (101, 202));
     }
 
     #[test]
