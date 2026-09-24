@@ -1,13 +1,13 @@
 use eframe::egui;
-use rusqlite::{params, Connection};
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::time::Instant;
+use tokio::sync::mpsc;
+use tokio_postgres::NoTls;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Pose3D {
@@ -43,6 +43,7 @@ fn update_dead_reckoning(pose: &mut Pose3D, acceleration: f32, gyro: f32, dt: f3
 const RES_NEAR: f32 = 0.05;
 const RES_MID: f32 = 0.10;
 const RES_FAR: f32 = 0.50;
+const DB_CHANNEL_CAPACITY: usize = 4096;
 
 fn resolution_for_range(range: f32) -> f32 {
     if range <= 10.0 {
@@ -71,12 +72,12 @@ struct Engine {
     frame: u64,
     simulation_time: f32,
     start: Instant,
-    db_tx: mpsc::SyncSender<DbCommand>,
+    db_tx: mpsc::Sender<DbCommand>,
     storage_ok: Arc<AtomicBool>,
 }
 
 impl Engine {
-    fn new(db_tx: mpsc::SyncSender<DbCommand>, storage_ok: Arc<AtomicBool>) -> Self {
+    fn new(db_tx: mpsc::Sender<DbCommand>, storage_ok: Arc<AtomicBool>) -> Self {
         Self {
             pose: Pose3D::default(),
             map: HashMap::with_capacity(4096),
@@ -147,14 +148,15 @@ impl Engine {
                 }
             }
         }
-        if self
-            .db_tx
-            .send(DbCommand::SaveFrame {
-                frame: self.frame,
-                pose: self.pose,
-                cells: changed_cells,
-            })
-            .is_err()
+        if !self.storage_ok.load(Ordering::Relaxed)
+            || self
+                .db_tx
+                .try_send(DbCommand::SaveFrame {
+                    frame: self.frame,
+                    pose: self.pose,
+                    cells: changed_cells,
+                })
+                .is_err()
         {
             self.storage_ok.store(false, Ordering::Release);
         }
@@ -162,73 +164,91 @@ impl Engine {
     }
 }
 
-fn database_path() -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-    let data_root = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "A local data directory is not available",
-            )
-        })?;
-    let data_dir = PathBuf::from(data_root).join("TacticalMapper");
-    std::fs::create_dir_all(&data_dir)?;
-    Ok(data_dir.join("tactical_mapper.sqlite3"))
+fn connection_string() -> String {
+    std::env::var("TACTICAL_MAPPER_DB_URL").unwrap_or_else(|_| {
+        "host=127.0.0.1 port=5432 user=postgres dbname=tactical_mapper_db".to_string()
+    })
 }
 
-fn run_db_worker(
-    rx: mpsc::Receiver<DbCommand>,
+async fn run_db_worker(
+    mut rx: mpsc::Receiver<DbCommand>,
     storage_ok: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let connection = Connection::open(database_path()?)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS vehicle_poses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            frame_id INTEGER NOT NULL,
-            pos_x REAL NOT NULL,
-            pos_y REAL NOT NULL,
-            pos_z REAL NOT NULL,
-            yaw REAL NOT NULL,
-            recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS grid_map_cells (
-            grid_x INTEGER NOT NULL,
-            grid_y INTEGER NOT NULL,
-            elevation REAL NOT NULL,
-            resolution REAL NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (grid_x, grid_y)
-        );",
-    )?;
+) -> Result<(), tokio_postgres::Error> {
+    let (client, connection) = tokio_postgres::connect(&connection_string(), NoTls).await?;
+    let connection_health = Arc::clone(&storage_ok);
+    tokio::spawn(async move {
+        if let Err(error) = connection.await {
+            eprintln!("PostgreSQL connection failed: {error}");
+        }
+        connection_health.store(false, Ordering::Release);
+    });
+    client
+        .batch_execute(include_str!("../../db/schema.sql"))
+        .await?;
     storage_ok.store(true, Ordering::Release);
-    while let Ok(command) = rx.recv() {
-        let result = (|| -> rusqlite::Result<()> {
-            let transaction = connection.unchecked_transaction()?;
-            match command {
-                DbCommand::SaveFrame { frame, pose, cells } => {
-                    transaction.execute(
-                        "INSERT INTO vehicle_poses (frame_id, pos_x, pos_y, pos_z, yaw) VALUES ($1, $2, $3, $4, $5)",
-                        params![frame as i64, pose.x, pose.y, pose.z, pose.yaw],
-                    )?;
-                    for (gx, gy, elevation, resolution) in cells {
-                        transaction.execute(
-                            "INSERT INTO grid_map_cells (grid_x, grid_y, elevation, resolution) VALUES ($1, $2, $3, $4)
-                             ON CONFLICT (grid_x, grid_y) DO UPDATE SET elevation = excluded.elevation, resolution = excluded.resolution, updated_at = CURRENT_TIMESTAMP",
-                            params![gx, gy, elevation, resolution],
-                        )?;
-                    }
-                }
+
+    let mut client = client;
+    let mut batch = Vec::with_capacity(64);
+    while let Some(command) = rx.recv().await {
+        batch.clear();
+        batch.push(command);
+        while batch.len() < 64 {
+            match rx.try_recv() {
+                Ok(command) => batch.push(command),
+                Err(_) => break,
             }
-            transaction.commit()
-        })();
-        if let Err(error) = result {
+        }
+        if let Err(error) = write_batch(&mut client, &batch).await {
             storage_ok.store(false, Ordering::Release);
-            eprintln!("Local storage write failed: {error}");
+            eprintln!("PostgreSQL batch write failed: {error}");
         } else {
             storage_ok.store(true, Ordering::Release);
-        };
+        }
     }
     Ok(())
+}
+
+async fn write_batch(
+    client: &mut tokio_postgres::Client,
+    batch: &[DbCommand],
+) -> Result<(), tokio_postgres::Error> {
+    let transaction = client.transaction().await?;
+    for command in batch {
+        match command {
+            DbCommand::SaveFrame { frame, pose, cells } => {
+                transaction
+                    .execute(
+                        "INSERT INTO mapping_frames
+                         (frame_id, pose_x, pose_y, pose_z, yaw, point_count)
+                         VALUES ($1, $2, $3, $4, $5, $6)",
+                        &[
+                            &(*frame as i64),
+                            &pose.x,
+                            &pose.y,
+                            &pose.z,
+                            &pose.yaw,
+                            &(cells.len() as i32),
+                        ],
+                    )
+                    .await?;
+                for (gx, gy, elevation, resolution) in cells {
+                    transaction
+                        .execute(
+                            "INSERT INTO spatial_cells
+                             (grid_x, grid_y, elevation, resolution)
+                             VALUES ($1, $2, $3, $4)
+                             ON CONFLICT (grid_x, grid_y)
+                             DO UPDATE SET elevation = EXCLUDED.elevation,
+                                           resolution = EXCLUDED.resolution,
+                                           updated_at = CURRENT_TIMESTAMP",
+                            &[gx, gy, elevation, resolution],
+                        )
+                        .await?;
+                }
+            }
+        }
+    }
+    transaction.commit().await
 }
 
 struct App {
@@ -504,6 +524,7 @@ fn prepare_installation() -> Result<bool, Box<dyn std::error::Error + Send + Syn
 }
 
 fn main() -> eframe::Result<()> {
+    println!("[STATUS] Tactical Mapper starting with PostgreSQL persistence.");
     let was_installed = match prepare_installation() {
         Ok(was_installed) => was_installed,
         Err(error) => {
@@ -515,14 +536,16 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    const DB_CHANNEL_CAPACITY: usize = 32;
-    let (db_tx, db_rx) = mpsc::sync_channel(DB_CHANNEL_CAPACITY);
+    let (db_tx, db_rx) = mpsc::channel(DB_CHANNEL_CAPACITY);
     let storage_ok = Arc::new(AtomicBool::new(false));
     let worker_storage_ok = Arc::clone(&storage_ok);
     std::thread::spawn(move || {
-        if let Err(error) = run_db_worker(db_rx, worker_storage_ok) {
-            eprintln!("Local storage stopped: {error}");
-        }
+        let runtime = tokio::runtime::Runtime::new().expect("failed to start Tokio runtime");
+        runtime.block_on(async move {
+            if let Err(error) = run_db_worker(db_rx, worker_storage_ok).await {
+                eprintln!("PostgreSQL worker stopped: {error}");
+            }
+        });
     });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

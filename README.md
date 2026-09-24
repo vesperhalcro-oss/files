@@ -2,7 +2,7 @@
 
 > Real-time local mapping when GPS is unavailable.
 
-Tactical Mapper is an offline-first LiDAR visualization tool for robotics teams,
+Tactical Mapper is a local LiDAR visualization tool for robotics teams,
 field operators, and developers who need a clear view of vehicle position, scan
 returns, and map reconstruction without relying on a network connection.
 
@@ -17,7 +17,7 @@ to see a simulated LiDAR map, moving vehicle marker, scan returns, telemetry,
 pause/resume controls, and speed control in your browser.
 
 The Windows application provides the same workflow as a native desktop tool,
-with local SQLite persistence and no network service required.
+with asynchronous PostgreSQL persistence on the local machine.
 
 ## Download and run
 
@@ -28,8 +28,8 @@ Run the one-step setup script from a Windows checkout:
 ```
 
 It builds the release binary, installs it for the current user, and creates a
-**Tactical Mapper** desktop shortcut. The local database is created automatically
-on first launch.
+**Tactical Mapper** desktop shortcut. PostgreSQL must be running locally before
+launching the application; see [`db/README.md`](db/README.md).
 
 ## Run the GUI and mock simulation
 
@@ -43,8 +43,7 @@ If you are not a developer, follow these steps:
 4. The first launch installs the application and creates a desktop shortcut.
 5. Open **Tactical Mapper** from the desktop whenever you want to use it.
 
-The application stores its database at
-`%LOCALAPPDATA%\TacticalMapper\tactical_mapper.sqlite3`.
+The application stores mapping data in the configured PostgreSQL database.
 
 ### From the source tree
 
@@ -54,7 +53,7 @@ The application stores its database at
 
 The window starts with a local mock LiDAR stream, a moving vehicle, a live map,
 pause/resume, speed control, reset, and telemetry. Data is saved automatically
-to the embedded local database.
+to PostgreSQL when the database is available.
 
 Or run directly:
 
@@ -75,5 +74,5 @@ release executable with:
 
 This builds `foveated_lidar_gui\target\release\tactical_mapper.exe`, installs it to
 `%LOCALAPPDATA%\TacticalMapper`, and creates a **Tactical Mapper** desktop
-shortcut in one step. The application creates its local SQLite database on
-startup. PostgreSQL is not required.
+shortcut in one step. PostgreSQL setup is documented in
+[`db/README.md`](db/README.md).

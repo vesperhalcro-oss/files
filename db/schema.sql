@@ -1,0 +1,24 @@
+CREATE TABLE IF NOT EXISTS mapping_frames (
+    id BIGSERIAL PRIMARY KEY,
+    frame_id BIGINT NOT NULL,
+    timestamp_ns BIGINT NOT NULL DEFAULT (
+        (EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000000000)::BIGINT
+    ),
+    pose_x DOUBLE PRECISION NOT NULL,
+    pose_y DOUBLE PRECISION NOT NULL,
+    pose_z DOUBLE PRECISION NOT NULL,
+    yaw DOUBLE PRECISION NOT NULL,
+    point_count INTEGER NOT NULL,
+    processing_latency_ms DOUBLE PRECISION,
+    fps DOUBLE PRECISION
+);
+
+CREATE TABLE IF NOT EXISTS spatial_cells (
+    grid_x INTEGER NOT NULL,
+    grid_y INTEGER NOT NULL,
+    elevation DOUBLE PRECISION NOT NULL,
+    resolution DOUBLE PRECISION NOT NULL,
+    class_name TEXT NOT NULL DEFAULT 'unknown',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (grid_x, grid_y)
+);

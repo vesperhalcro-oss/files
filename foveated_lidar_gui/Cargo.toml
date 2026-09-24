@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 eframe = "0.28"
 egui = "0.28"
-rusqlite = { version = "0.32", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio-postgres = "0.7"
 
 [profile.release]
 lto = true
