@@ -261,6 +261,18 @@ fn update_dead_reckoning(pose: &mut Pose3D, acceleration: f32, gyro: f32, dt: f3
     pose.y += acceleration * dt * sin_yaw;
 }
 
+fn configured_motion() -> (f32, f32) {
+    let acceleration = std::env::var("TACTICAL_MAPPER_ACCELERATION")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.5);
+    let gyro = std::env::var("TACTICAL_MAPPER_GYRO_RATE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.01);
+    (acceleration, gyro)
+}
+
 const RES_NEAR: f32 = 0.05;
 const RES_MID: f32 = 0.10;
 const RES_FAR: f32 = 0.50;
@@ -451,7 +463,8 @@ impl Engine {
     fn step(&mut self, dt: f32, speed: f32) {
         let simulation_dt = dt * speed;
         self.simulation_time += simulation_dt;
-        update_dead_reckoning(&mut self.pose, 0.5, 0.01, simulation_dt);
+        let (acceleration, gyro) = configured_motion();
+        update_dead_reckoning(&mut self.pose, acceleration, gyro, simulation_dt);
         self.trail.push_back((self.pose.x, self.pose.y));
         if self.trail.len() > 2048 {
             self.trail.pop_front();
