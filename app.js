@@ -9,6 +9,11 @@ const frameValue = document.querySelector("#telemetry-frame");
 const positionValue = document.querySelector("#telemetry-position");
 const yawValue = document.querySelector("#telemetry-yaw");
 const pointsValue = document.querySelector("#telemetry-points");
+const ids = (prefix) => Object.fromEntries(["drivable", "nondrivable", "static", "dynamic", "near", "mid", "far", "cells", "fps", "latency", "point-rate", "queue"].map((name) => [name, document.querySelector(`#${prefix}-${name}`)]));
+const semanticValues = ids("semantic");
+const zoneValues = ids("zone");
+const metricValues = ids("metric");
+const cellsValue = document.querySelector("#telemetry-cells");
 
 const state = {
   running: true,
@@ -17,6 +22,11 @@ const state = {
   time: 0,
   pose: { x: 0, y: 0, yaw: 0 },
   trail: [],
+  lastFrameTime: 0,
+  fps: 0,
+  latency: 0,
+  frameInterval: 16.7,
+  queue: 0,
 };
 
 function resizeCanvas() {
@@ -34,6 +44,18 @@ function updateTelemetry() {
   positionValue.textContent = `${state.pose.x.toFixed(1)}, ${state.pose.y.toFixed(1)}`;
   yawValue.textContent = `${(state.pose.yaw * 180 / Math.PI).toFixed(1)}°`;
   pointsValue.textContent = "240";
+  cellsValue.textContent = Math.round(state.frame * 18 + 240).toLocaleString();
+  semanticValues.drivable.textContent = Math.round(70 + Math.sin(state.time) * 12);
+  semanticValues.nondrivable.textContent = Math.round(82 + Math.cos(state.time * 0.8) * 10);
+  semanticValues.static.textContent = Math.round(48 + Math.sin(state.time * 0.6) * 8);
+  semanticValues.dynamic.textContent = Math.round(40 + Math.cos(state.time * 0.5) * 7);
+  zoneValues.near.textContent = Math.round(120 + Math.sin(state.time) * 15);
+  zoneValues.mid.textContent = Math.round(78 + Math.cos(state.time) * 12);
+  zoneValues.far.textContent = Math.round(42 + Math.sin(state.time * 0.7) * 8);
+  metricValues.fps.textContent = state.fps.toFixed(1);
+  metricValues.latency.textContent = `${state.latency.toFixed(2)} ms`;
+  metricValues["point-rate"].textContent = `${Math.round(240 / Math.max(state.frameInterval / 1000, 0.001)).toLocaleString()}/s`;
+  metricValues.queue.textContent = `demo · ${state.queue} pending`;
 }
 
 function draw() {
@@ -75,9 +97,12 @@ function draw() {
     const worldX = state.pose.x + range * Math.cos(angle + state.pose.yaw);
     const worldY = state.pose.y + range * Math.sin(angle + state.pose.yaw);
     const intensity = 0.5 + 0.5 * Math.sin(angle * 5 + state.time);
-    context.fillStyle = `rgba(125, 211, 252, ${0.25 + intensity * 0.7})`;
+    const color = range <= 10 ? "#4ade80" : range <= 30 ? "#fbbf24" : "#fb7185";
+    context.fillStyle = color;
+    context.globalAlpha = 0.35 + intensity * 0.6;
     context.fillRect(centerX + worldX * scale, centerY - worldY * scale, 2, 2);
   }
+  context.globalAlpha = 1;
 
   context.save();
   context.translate(centerX + state.pose.x * scale, centerY - state.pose.y * scale);
@@ -100,6 +125,7 @@ function step(timestamp) {
   const delta = Math.min((timestamp - state.lastTimestamp) / 1000, 0.1);
   state.lastTimestamp = timestamp;
   if (state.running) {
+    const frameStart = performance.now();
     const simulationDelta = delta * state.speed;
     state.time += simulationDelta;
     state.pose.yaw += 0.01 * simulationDelta;
@@ -108,6 +134,10 @@ function step(timestamp) {
     state.trail.push([state.pose.x, state.pose.y]);
     if (state.trail.length > 2048) state.trail.shift();
     state.frame += 1;
+    state.latency = performance.now() - frameStart;
+    state.frameInterval = delta * 1000;
+    state.fps = delta > 0 ? 1 / delta : 0;
+    state.queue = Math.max(0, Math.round(state.queue + 0.4 - (state.fps > 30 ? 0.7 : 0.1)));
     updateTelemetry();
   }
   draw();

@@ -379,6 +379,62 @@ h1 {
   font-size: 0.95rem;
 }
 
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.dashboard-card {
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.metric-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.metric-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.metric-list strong {
+  color: var(--text);
+}
+
+.architecture-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  padding: 1.5rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 1.2rem;
+  background: rgba(9, 18, 28, 0.7);
+  color: var(--primary);
+  text-align: center;
+}
+
+.architecture-flow span {
+  padding: 0.65rem 0.8rem;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  border-radius: 0.7rem;
+  color: var(--text);
+}
+
+.architecture-flow b {
+  color: var(--accent);
+}
+
 .section-heading {
   margin-bottom: 1.5rem;
 }
@@ -479,7 +535,8 @@ h1 {
   .info-grid,
   .feature-list,
   .panel-grid,
-  .app-grid {
+  .app-grid,
+  .dashboard-grid {
     grid-template-columns: 1fr;
   }
 
