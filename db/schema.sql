@@ -16,9 +16,11 @@ CREATE TABLE IF NOT EXISTS mapping_frames (
 CREATE TABLE IF NOT EXISTS spatial_cells (
     grid_x INTEGER NOT NULL,
     grid_y INTEGER NOT NULL,
+    resolution_band SMALLINT NOT NULL,
     elevation DOUBLE PRECISION NOT NULL,
     resolution DOUBLE PRECISION NOT NULL,
     class_name TEXT NOT NULL DEFAULT 'unknown',
+    confidence REAL NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (grid_x, grid_y)
+    PRIMARY KEY (grid_x, grid_y, resolution_band)
 );

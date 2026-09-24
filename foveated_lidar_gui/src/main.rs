@@ -1,4 +1,5 @@
 use eframe::egui;
+use serde::Deserialize;
 use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{
@@ -15,6 +16,113 @@ struct Pose3D {
     y: f32,
     z: f32,
     yaw: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticClass {
+    Unknown,
+    DrivableTerrain,
+    NonDrivableTerrain,
+    Wall,
+    Pole,
+    Barrier,
+    StaticObstacle,
+    Pedestrian,
+    Vehicle,
+    OtherDynamic,
+}
+
+impl SemanticClass {
+    const ALL: [Self; 10] = [
+        Self::Unknown,
+        Self::DrivableTerrain,
+        Self::NonDrivableTerrain,
+        Self::Wall,
+        Self::Pole,
+        Self::Barrier,
+        Self::StaticObstacle,
+        Self::Pedestrian,
+        Self::Vehicle,
+        Self::OtherDynamic,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::DrivableTerrain => "drivable_terrain",
+            Self::NonDrivableTerrain => "non_drivable_terrain",
+            Self::Wall => "wall",
+            Self::Pole => "pole",
+            Self::Barrier => "barrier",
+            Self::StaticObstacle => "static_obstacle",
+            Self::Pedestrian => "pedestrian",
+            Self::Vehicle => "vehicle",
+            Self::OtherDynamic => "other_dynamic",
+        }
+    }
+
+    fn color(self) -> egui::Color32 {
+        match self {
+            Self::DrivableTerrain => egui::Color32::from_rgb(95, 190, 130),
+            Self::NonDrivableTerrain => egui::Color32::from_rgb(185, 145, 85),
+            Self::Wall | Self::Barrier | Self::StaticObstacle => {
+                egui::Color32::from_rgb(220, 115, 90)
+            }
+            Self::Pole => egui::Color32::from_rgb(175, 135, 225),
+            Self::Pedestrian | Self::Vehicle | Self::OtherDynamic => {
+                egui::Color32::from_rgb(240, 90, 150)
+            }
+            Self::Unknown => egui::Color32::from_rgb(150, 165, 165),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpatialCell {
+    elevation: f32,
+    resolution: f32,
+    semantic_class: SemanticClass,
+    confidence: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DatasetPoint {
+    x: f32,
+    y: f32,
+    z: f32,
+    intensity: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DatasetFrame {
+    lidar_scan: Vec<DatasetPoint>,
+}
+
+fn load_dataset() -> Vec<LidarPoint> {
+    let dataset: DatasetFrame = serde_json::from_str(include_str!("mock_lidar_stream.json"))
+        .expect("mock LiDAR dataset must be valid JSON");
+    dataset
+        .lidar_scan
+        .into_iter()
+        .map(|point| LidarPoint {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+            intensity: point.intensity,
+        })
+        .collect()
+}
+
+fn classify_point(point: LidarPoint) -> (SemanticClass, f32) {
+    if point.z < 0.75 {
+        (SemanticClass::DrivableTerrain, 0.82)
+    } else if point.z < 1.1 && point.intensity > 0.7 {
+        (SemanticClass::Barrier, 0.68)
+    } else if point.z > 1.6 {
+        (SemanticClass::StaticObstacle, 0.61)
+    } else {
+        (SemanticClass::NonDrivableTerrain, 0.55)
+    }
 }
 
 impl Pose3D {
@@ -60,13 +168,13 @@ enum DbCommand {
     SaveFrame {
         frame: u64,
         pose: Pose3D,
-        cells: Vec<(i32, i32, f32, f32)>,
+        cells: Vec<(i32, i32, f32, f32, &'static str, f32)>,
     },
 }
 
 struct Engine {
     pose: Pose3D,
-    map: HashMap<(i32, i32), (f32, f32)>,
+    map: HashMap<(i32, i32, u8), SpatialCell>,
     points: Vec<LidarPoint>,
     trail: VecDeque<(f32, f32)>,
     frame: u64,
@@ -74,6 +182,8 @@ struct Engine {
     start: Instant,
     db_tx: mpsc::Sender<DbCommand>,
     storage_ok: Arc<AtomicBool>,
+    dataset: Vec<LidarPoint>,
+    dataset_offset: usize,
 }
 
 impl Engine {
@@ -88,6 +198,8 @@ impl Engine {
             start: Instant::now(),
             db_tx,
             storage_ok,
+            dataset: load_dataset(),
+            dataset_offset: 0,
         }
     }
 
@@ -111,52 +223,74 @@ impl Engine {
         }
 
         self.points.clear();
+        let dataset_len = self.dataset.len();
         let mut changed_cells = Vec::new();
-        for index in 0..240 {
-            let angle = index as f32 * std::f32::consts::TAU / 240.0;
-            let range = 8.0
-                + (angle * 3.0 + self.simulation_time).sin() * 2.0
-                + (angle * 11.0 - self.simulation_time * 0.7).cos().abs() * 1.5;
-            let intensity =
-                (0.5 + 0.5 * (angle * 5.0 + self.simulation_time).sin()).clamp(0.0, 1.0);
+        for index in 0..dataset_len {
+            let dataset_point = self.dataset[(self.dataset_offset + index) % dataset_len];
             let point = LidarPoint {
-                x: range * angle.cos(),
-                y: range * angle.sin(),
-                z: 0.5 + intensity,
-                intensity,
+                x: dataset_point.x * 0.12,
+                y: dataset_point.y * 0.12,
+                z: dataset_point.z,
+                intensity: dataset_point.intensity,
             };
             self.points.push(point);
 
             let (sin_yaw, cos_yaw) = self.pose.yaw.sin_cos();
             let world_x = self.pose.x + point.x * cos_yaw - point.y * sin_yaw;
             let world_y = self.pose.y + point.x * sin_yaw + point.y * cos_yaw;
+            let range = point.x.hypot(point.y);
             let resolution = resolution_for_range(range);
+            let resolution_band = (resolution * 100.0) as u8;
+            let (semantic_class, confidence) = classify_point(point);
             let cell = (
                 (world_x / resolution).floor() as i32,
                 (world_y / resolution).floor() as i32,
             );
-            match self.map.entry(cell) {
+            let key = (cell.0, cell.1, resolution_band);
+            match self.map.entry(key) {
                 Entry::Occupied(mut entry) => {
-                    if point.z > entry.get().0 {
-                        entry.get_mut().0 = point.z;
-                        changed_cells.push((cell.0, cell.1, point.z, resolution));
+                    if point.z > entry.get().elevation || confidence > entry.get().confidence {
+                        let stored = entry.get_mut();
+                        stored.elevation = stored.elevation.max(point.z);
+                        stored.semantic_class = semantic_class;
+                        stored.confidence = confidence;
+                        changed_cells.push((
+                            cell.0,
+                            cell.1,
+                            point.z,
+                            resolution,
+                            semantic_class.as_str(),
+                            confidence,
+                        ));
                     }
                 }
                 Entry::Vacant(entry) => {
-                    entry.insert((point.z, resolution));
-                    changed_cells.push((cell.0, cell.1, point.z, resolution));
+                    entry.insert(SpatialCell {
+                        elevation: point.z,
+                        resolution,
+                        semantic_class,
+                        confidence,
+                    });
+                    changed_cells.push((
+                        cell.0,
+                        cell.1,
+                        point.z,
+                        resolution,
+                        semantic_class.as_str(),
+                        confidence,
+                    ));
                 }
             }
         }
-        if !self.storage_ok.load(Ordering::Relaxed)
-            || self
-                .db_tx
-                .try_send(DbCommand::SaveFrame {
-                    frame: self.frame,
-                    pose: self.pose,
-                    cells: changed_cells,
-                })
-                .is_err()
+        self.dataset_offset = (self.dataset_offset + 1) % dataset_len;
+        if self
+            .db_tx
+            .try_send(DbCommand::SaveFrame {
+                frame: self.frame,
+                pose: self.pose,
+                cells: changed_cells,
+            })
+            .is_err()
         {
             self.storage_ok.store(false, Ordering::Release);
         }
@@ -231,17 +365,19 @@ async fn write_batch(
                         ],
                     )
                     .await?;
-                for (gx, gy, elevation, resolution) in cells {
+                for (gx, gy, elevation, resolution, class_name, confidence) in cells {
                     transaction
                         .execute(
                             "INSERT INTO spatial_cells
-                             (grid_x, grid_y, elevation, resolution)
-                             VALUES ($1, $2, $3, $4)
-                             ON CONFLICT (grid_x, grid_y)
+                             (grid_x, grid_y, resolution_band, elevation, resolution, class_name, confidence)
+                             VALUES ($1, $2, $3, $4, $5, $6, $7)
+                             ON CONFLICT (grid_x, grid_y, resolution_band)
                              DO UPDATE SET elevation = EXCLUDED.elevation,
                                            resolution = EXCLUDED.resolution,
+                                           class_name = EXCLUDED.class_name,
+                                           confidence = EXCLUDED.confidence,
                                            updated_at = CURRENT_TIMESTAMP",
-                            &[gx, gy, elevation, resolution],
+                            &[gx, gy, &((*resolution * 100.0) as i16), elevation, resolution, class_name, confidence],
                         )
                         .await?;
                 }
@@ -308,11 +444,7 @@ impl App {
             let world_x = self.engine.pose.x + point.x * cos_yaw - point.y * sin_yaw;
             let world_y = self.engine.pose.y + point.x * sin_yaw + point.y * cos_yaw;
             let position = center + egui::vec2(world_x * scale, -world_y * scale);
-            let color = egui::Color32::from_rgb(
-                (70.0 + point.intensity * 100.0) as u8,
-                (170.0 + point.intensity * 70.0) as u8,
-                (145.0 + point.intensity * 70.0) as u8,
-            );
+            let color = classify_point(*point).0.color();
             painter.circle_filled(position, 1.8 + point.z * 0.35, color);
         }
         let vehicle = center + egui::vec2(self.engine.pose.x * scale, -self.engine.pose.y * scale);
@@ -409,6 +541,15 @@ impl eframe::App for App {
                         ui.weak("Map cells");
                         ui.label(self.engine.map.len().to_string());
                         ui.end_row();
+                        ui.weak("Resolution bands");
+                        let bands = self
+                            .engine
+                            .map
+                            .values()
+                            .filter(|cell| cell.resolution == RES_NEAR)
+                            .count();
+                        ui.label(format!("{bands} near / {} total", self.engine.map.len()));
+                        ui.end_row();
                         ui.weak("Position");
                         ui.label(format!(
                             "{:.1}, {:.1} m",
@@ -439,6 +580,11 @@ impl eframe::App for App {
                         "Storage: degraded"
                     },
                 );
+                ui.collapsing("Semantic legend (rule-based)", |ui| {
+                    for class in SemanticClass::ALL {
+                        ui.colored_label(class.color(), class.as_str());
+                    }
+                });
             });
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Live tactical map");
@@ -595,5 +741,34 @@ mod tests {
         assert_eq!(resolution_for_range(10.01), RES_MID);
         assert_eq!(resolution_for_range(30.0), RES_MID);
         assert_eq!(resolution_for_range(30.01), RES_FAR);
+    }
+
+    #[test]
+    fn dataset_is_loaded_for_replay() {
+        assert!(!load_dataset().is_empty());
+    }
+
+    #[test]
+    fn classifier_returns_terrain_and_obstacle_classes() {
+        assert_eq!(
+            classify_point(LidarPoint {
+                x: 1.0,
+                y: 1.0,
+                z: 0.5,
+                intensity: 0.2
+            })
+            .0,
+            SemanticClass::DrivableTerrain
+        );
+        assert_eq!(
+            classify_point(LidarPoint {
+                x: 1.0,
+                y: 1.0,
+                z: 0.9,
+                intensity: 0.9
+            })
+            .0,
+            SemanticClass::Barrier
+        );
     }
 }

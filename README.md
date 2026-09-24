@@ -4,7 +4,9 @@
 
 Tactical Mapper is a local LiDAR visualization tool for robotics teams,
 field operators, and developers who need a clear view of vehicle position, scan
-returns, and map reconstruction without relying on a network connection.
+returns, semantic terrain labels, and map reconstruction. The native prototype
+replays the checked-in LiDAR dataset at `foveated_lidar_gui/src/mock_lidar_stream.json`
+through the same foveated mapping pipeline used for live input.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-Vercel-111827?logo=vercel)](https://vercel-hosting-setup-and-link.vercel.app/)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
@@ -51,9 +53,10 @@ The application stores mapping data in the configured PostgreSQL database.
 .\run_project.ps1
 ```
 
-The window starts with a local mock LiDAR stream, a moving vehicle, a live map,
-pause/resume, speed control, reset, and telemetry. Data is saved automatically
-to PostgreSQL when the database is available.
+The window starts with a checked-in LiDAR dataset replay, a moving vehicle, a
+semantic map, pause/resume, speed control, reset, and telemetry. Current
+semantic labels use explicit rule-based heuristics; trained perception models
+are not claimed or bundled.
 
 Or run directly:
 
