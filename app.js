@@ -44,6 +44,7 @@ async function loadReplay() {
   state.replayFrames = frames;
   state.replayLoaded = true;
   state.currentFrame = frames[0];
+  state.frame = 1;
   updateTelemetry();
   draw();
 }
